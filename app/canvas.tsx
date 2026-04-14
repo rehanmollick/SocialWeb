@@ -9,6 +9,7 @@ export type GraphNode = {
   bg: string;
   strength: number;
   tags: string[];
+  description?: string;
 };
 export type GraphEdge = { source: number; target: number; weight: number };
 export type GraphPayload = {
@@ -155,6 +156,8 @@ type GraphCanvasProps = {
   onClusterClick?: (bg: string, screenX: number, screenY: number) => void;
   onHazeFaded?: (bg: string) => void;
   onConnect?: (aId: number, bId: number) => void;
+  onCreateAt?: (screenX: number, screenY: number, bg: string) => void;
+  onMoveGroup?: (ids: number[]) => void;
   focusId?: number | null;
 };
 
@@ -171,7 +174,7 @@ function primaryTagOf(tags: string[]): string {
   return 'friends';
 }
 
-export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterClick, onHazeFaded, onConnect, focusId }: GraphCanvasProps) {
+export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterClick, onHazeFaded, onConnect, onCreateAt, onMoveGroup, focusId }: GraphCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const onSelectRef = useRef(onSelect);
@@ -179,6 +182,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
   const onClusterClickRef = useRef(onClusterClick);
   const onHazeFadedRef = useRef(onHazeFaded);
   const onConnectRef = useRef(onConnect);
+  const onCreateAtRef = useRef(onCreateAt);
+  const onMoveGroupRef = useRef(onMoveGroup);
   const runtimeRef = useRef<Runtime | null>(null);
   const graphRef = useRef<GraphPayload>(graph);
   onSelectRef.current = onSelect;
@@ -186,6 +191,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
   onClusterClickRef.current = onClusterClick;
   onHazeFadedRef.current = onHazeFaded;
   onConnectRef.current = onConnect;
+  onCreateAtRef.current = onCreateAt;
+  onMoveGroupRef.current = onMoveGroup;
   graphRef.current = graph;
 
   useEffect(() => {
@@ -465,6 +472,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           ex.strength = n.strength;
           ex.s = n.strength;
           ex.tags = tags;
+          ex.description = n.description;
           ex.primary = primaryTagOf(tags);
         } else {
           const c = bgCenters[n.bg in bgCenters ? n.bg : 'online'];
@@ -531,6 +539,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       .filter((ev) => {
         if (ev.type === 'wheel') return true;
         if ((ev as KeyboardEvent).shiftKey) return false;
+        if ((ev as KeyboardEvent).altKey) return false;
+        if ((ev as KeyboardEvent).metaKey || (ev as KeyboardEvent).ctrlKey) return false;
         if (ev.button && ev.button !== 0) return false;
         const cx = (ev as PointerEvent).clientX ?? (ev as MouseEvent).clientX;
         const cy = (ev as PointerEvent).clientY ?? (ev as MouseEvent).clientY;
@@ -601,7 +611,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         } else {
           n.fx = null;
           n.fy = null;
-          onSelectRef.current?.({ id: n.id, name: n.name, bg: n.bg, strength: n.s, tags: n.tags });
+          onSelectRef.current?.({ id: n.id, name: n.name, bg: n.bg, strength: n.s, tags: n.tags, description: n.description });
           onSelectEdgeRef.current?.(null);
         }
       });
@@ -620,7 +630,67 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         y: (my - currentTransform.y) / currentTransform.k,
       };
     };
+    // ===== marquee (cmd/ctrl + drag) =====
+    let marquee: { sx: number; sy: number; ex: number; ey: number } | null = null;
+    const selectedIds = new Set<number>();
+    let groupDragging = false;
+    let groupDragLastW = { x: 0, y: 0 };
+    let suppressClickUntil = 0;
+
+    const nearestBgAt = (wx: number, wy: number): string => {
+      let best = 'online';
+      let bestD = Infinity;
+      for (const bg of bgOrder) {
+        const c = bgCenters[bg];
+        const d = (c.x - wx) ** 2 + (c.y - wy) ** 2;
+        if (d < bestD) {
+          bestD = d;
+          best = bg;
+        }
+      }
+      return best;
+    };
+
     const onPointerDown = (ev: PointerEvent) => {
+      // alt+click on empty → create new dot
+      if (ev.altKey && !ev.shiftKey) {
+        const hit = hitNodeAt(ev.clientX, ev.clientY);
+        if (hit) return;
+        const w = screenToWorld(ev.clientX, ev.clientY);
+        const bg = nearestBgAt(w.x, w.y);
+        onCreateAtRef.current?.(ev.clientX, ev.clientY, bg);
+        suppressClickUntil = performance.now() + 400;
+        ev.stopPropagation();
+        ev.preventDefault();
+        return;
+      }
+      // cmd/ctrl drag → marquee or move existing group
+      if ((ev.metaKey || ev.ctrlKey) && !ev.shiftKey) {
+        const w = screenToWorld(ev.clientX, ev.clientY);
+        // if clicking on an already-selected node, start group drag
+        const hit = hitNodeAt(ev.clientX, ev.clientY);
+        if (hit && selectedIds.has(hit.id)) {
+          groupDragging = true;
+          groupDragLastW = w;
+          for (const n of gNodes) {
+            if (selectedIds.has(n.id)) {
+              n.fx = n.x ?? 0;
+              n.fy = n.y ?? 0;
+            }
+          }
+          sim.alphaTarget(0.15).restart();
+        } else {
+          marquee = { sx: w.x, sy: w.y, ex: w.x, ey: w.y };
+          selectedIds.clear();
+        }
+        try {
+          canvas.setPointerCapture(ev.pointerId);
+        } catch {}
+        ev.stopPropagation();
+        ev.preventDefault();
+        return;
+      }
+      // shift+drag to connect
       if (!ev.shiftKey) return;
       const hit = hitNodeAt(ev.clientX, ev.clientY);
       if (!hit) return;
@@ -633,11 +703,72 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       ev.preventDefault();
     };
     const onPointerMove = (ev: PointerEvent) => {
+      if (marquee) {
+        const w = screenToWorld(ev.clientX, ev.clientY);
+        marquee.ex = w.x;
+        marquee.ey = w.y;
+        ev.stopPropagation();
+        return;
+      }
+      if (groupDragging) {
+        const w = screenToWorld(ev.clientX, ev.clientY);
+        const dx = w.x - groupDragLastW.x;
+        const dy = w.y - groupDragLastW.y;
+        groupDragLastW = w;
+        for (const n of gNodes) {
+          if (!selectedIds.has(n.id)) continue;
+          n.fx = (n.fx ?? n.x ?? 0) + dx;
+          n.fy = (n.fy ?? n.y ?? 0) + dy;
+        }
+        sim.alpha(0.2);
+        ev.stopPropagation();
+        return;
+      }
       if (!connectSource) return;
       connectMouseW = screenToWorld(ev.clientX, ev.clientY);
       ev.stopPropagation();
     };
     const onPointerUp = (ev: PointerEvent) => {
+      if (marquee) {
+        const minX = Math.min(marquee.sx, marquee.ex);
+        const maxX = Math.max(marquee.sx, marquee.ex);
+        const minY = Math.min(marquee.sy, marquee.ey);
+        const maxY = Math.max(marquee.sy, marquee.ey);
+        selectedIds.clear();
+        for (const n of gNodes) {
+          const nx = n.x ?? 0;
+          const ny = n.y ?? 0;
+          if (nx >= minX && nx <= maxX && ny >= minY && ny <= maxY) {
+            selectedIds.add(n.id);
+          }
+        }
+        marquee = null;
+        suppressClickUntil = performance.now() + 300;
+        try {
+          canvas.releasePointerCapture(ev.pointerId);
+        } catch {}
+        ev.stopPropagation();
+        return;
+      }
+      if (groupDragging) {
+        groupDragging = false;
+        sim.alphaTarget(0);
+        for (const n of gNodes) {
+          if (!selectedIds.has(n.id)) continue;
+          n._ax = n.fx ?? undefined;
+          n._ay = n.fy ?? undefined;
+          n._pinned = true;
+          n.fx = null;
+          n.fy = null;
+        }
+        onMoveGroupRef.current?.(Array.from(selectedIds));
+        suppressClickUntil = performance.now() + 300;
+        try {
+          canvas.releasePointerCapture(ev.pointerId);
+        } catch {}
+        ev.stopPropagation();
+        return;
+      }
       if (!connectSource) return;
       const target = hitNodeAt(ev.clientX, ev.clientY);
       if (target && target.id !== connectSource.id) {
@@ -660,6 +791,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         justConnected = false;
         return;
       }
+      if (performance.now() < suppressClickUntil) return;
+      if (ev.altKey || ev.metaKey || ev.ctrlKey) return;
       const rect = canvas.getBoundingClientRect();
       const mx = ev.clientX - rect.left;
       const my = ev.clientY - rect.top;
@@ -684,6 +817,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           bg: hitNode.bg,
           strength: hitNode.s,
           tags: hitNode.tags,
+          description: hitNode.description,
         });
         onSelectEdgeRef.current?.(null);
         return;
@@ -1222,6 +1356,37 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           ctx.arc(tx, ty, 14, 0, Math.PI * 2);
           ctx.stroke();
         }
+        ctx.restore();
+      }
+
+      // ===== selection rings =====
+      if (selectedIds.size > 0) {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(180,220,255,0.9)';
+        ctx.lineWidth = 1.6 / currentTransform.k;
+        for (const n of gNodes) {
+          if (!selectedIds.has(n.id)) continue;
+          ctx.beginPath();
+          ctx.arc(n.x ?? 0, n.y ?? 0, 16, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      // ===== marquee rect =====
+      if (marquee) {
+        ctx.save();
+        const x = Math.min(marquee.sx, marquee.ex);
+        const y = Math.min(marquee.sy, marquee.ey);
+        const w = Math.abs(marquee.ex - marquee.sx);
+        const h = Math.abs(marquee.ey - marquee.sy);
+        ctx.fillStyle = 'rgba(180,220,255,0.08)';
+        ctx.fillRect(x, y, w, h);
+        ctx.strokeStyle = 'rgba(180,220,255,0.7)';
+        ctx.lineWidth = 1.2 / currentTransform.k;
+        ctx.setLineDash([5 / currentTransform.k, 3 / currentTransform.k]);
+        ctx.strokeRect(x, y, w, h);
+        ctx.setLineDash([]);
         ctx.restore();
       }
 

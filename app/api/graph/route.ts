@@ -10,6 +10,7 @@ type GraphNode = {
   bg: string;
   strength: number;
   tags: string[];
+  description: string;
 };
 
 type GraphEdge = {
@@ -32,6 +33,7 @@ export async function GET() {
     bg: p.bg,
     strength: p.strength,
     tags: safeTags(p.tags),
+    description: p.description ?? '',
   }));
 
   const byThought = new Map<number, number[]>();

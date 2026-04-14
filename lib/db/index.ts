@@ -21,6 +21,7 @@ sqlite.exec(`
     bg TEXT NOT NULL DEFAULT 'online',
     strength REAL NOT NULL DEFAULT 5,
     tags TEXT NOT NULL DEFAULT '[]',
+    description TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   );
@@ -49,6 +50,12 @@ sqlite.exec(`
     name TEXT NOT NULL
   );
 `);
+
+// runtime migration: add description column if missing
+const peopleCols = sqlite.prepare("PRAGMA table_info(people)").all() as { name: string }[];
+if (!peopleCols.some((c) => c.name === 'description')) {
+  sqlite.exec("ALTER TABLE people ADD COLUMN description TEXT NOT NULL DEFAULT ''");
+}
 
 export const db = drizzle(sqlite, { schema });
 export { schema };

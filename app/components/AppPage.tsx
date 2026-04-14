@@ -42,6 +42,15 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
     y: number;
     value: string;
   } | null>(null);
+  const [createPopup, setCreatePopup] = useState<{
+    x: number;
+    y: number;
+    bg: string;
+    name: string;
+    description: string;
+    tags: string[];
+  } | null>(null);
+  const [descDraft, setDescDraft] = useState<string>('');
 
   const fetchGraph = useCallback(async () => {
     const res = await fetch('/api/graph', { cache: 'no-store' });
@@ -93,6 +102,7 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
     setConnecting(false);
     setConnectQuery('');
     setConnectStrength(3);
+    setDescDraft(n.description ?? '');
   };
 
   const pickEdge = (e: EdgeSelection | null) => {
@@ -208,6 +218,42 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
     await fetchGraph();
   };
 
+  const submitCreatePopup = async () => {
+    if (!createPopup) return;
+    const name = createPopup.name.trim();
+    if (!name) {
+      setCreatePopup(null);
+      return;
+    }
+    const body = {
+      name,
+      bg: createPopup.bg,
+      description: createPopup.description,
+      tags: createPopup.tags,
+      strength: 5,
+    };
+    setCreatePopup(null);
+    await fetch('/api/people', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    await fetchGraph();
+  };
+
+  const saveDescription = async (id: number, description: string) => {
+    setSelected((prev) => (prev && prev.id === id ? { ...prev, description } : prev));
+    setGraph((g) => ({
+      ...g,
+      nodes: g.nodes.map((n) => (n.id === id ? { ...n, description } : n)),
+    }));
+    await fetch(`/api/people/${id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ description }),
+    });
+  };
+
   const handleConnect = async (a: number, b: number) => {
     if (a === b) return;
     await fetch('/api/edges', {
@@ -299,7 +345,10 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
           graph={graph}
           onSelect={(n) => {
             setSelected(n);
-            if (n) setSelectedEdge(null);
+            if (n) {
+              setSelectedEdge(null);
+              setDescDraft(n.description ?? '');
+            }
             setConnecting(false);
             setConnectQuery('');
           }}
@@ -309,6 +358,10 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
           }}
           onHazeFaded={handleHazeFaded}
           onConnect={handleConnect}
+          onCreateAt={(sx, sy, bg) => {
+            setCreatePopup({ x: sx, y: sy, bg, name: '', description: '', tags: [] });
+          }}
+          onMoveGroup={() => {}}
           focusId={focusId}
         />
 
@@ -338,6 +391,90 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
           <div className="crow"><kbd>wheel</kbd>/<kbd>pinch</kbd><span>zoom</span></div>
           <div className="crow"><kbd>click</kbd><span>haze → name cluster</span></div>
         </div>
+
+        {createPopup && (
+          <div
+            className="create-popup"
+            style={{ left: createPopup.x, top: createPopup.y }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="cp-head">new person · {labelFor(createPopup.bg)}</div>
+            <input
+              autoFocus
+              placeholder="name"
+              value={createPopup.name}
+              onChange={(e) =>
+                setCreatePopup((p) => (p ? { ...p, name: e.target.value } : p))
+              }
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') submitCreatePopup();
+                if (e.key === 'Escape') setCreatePopup(null);
+              }}
+            />
+            <textarea
+              placeholder="description (optional)"
+              value={createPopup.description}
+              rows={2}
+              onChange={(e) =>
+                setCreatePopup((p) => (p ? { ...p, description: e.target.value } : p))
+              }
+            />
+            <div className="cp-bg">
+              {BG_KEYS.map((bg) => (
+                <span
+                  key={bg}
+                  className="dd-tag"
+                  onClick={() =>
+                    setCreatePopup((p) => (p ? { ...p, bg } : p))
+                  }
+                  style={{
+                    cursor: 'pointer',
+                    opacity: createPopup.bg === bg ? 1 : 0.35,
+                    borderColor: createPopup.bg === bg ? bgColors[bg] : 'transparent',
+                  }}
+                >
+                  <i style={{ background: bgColors[bg] ?? '#8fc08f' }} />
+                  {labelFor(bg)}
+                </span>
+              ))}
+            </div>
+            <div className="cp-tags">
+              {TAG_KEYS.map((t) => {
+                const active = createPopup.tags.includes(t);
+                return (
+                  <span
+                    key={t}
+                    className="dd-tag"
+                    onClick={() =>
+                      setCreatePopup((p) =>
+                        p
+                          ? {
+                              ...p,
+                              tags: active ? p.tags.filter((x) => x !== t) : [...p.tags, t],
+                            }
+                          : p
+                      )
+                    }
+                    style={{
+                      cursor: 'pointer',
+                      opacity: active ? 1 : 0.35,
+                      borderColor: active ? tagColors[t] : 'transparent',
+                    }}
+                  >
+                    <i style={{ background: tagColors[t] ?? '#8fc08f' }} />
+                    {t}
+                  </span>
+                );
+              })}
+            </div>
+            <div className="cp-actions">
+              <button onClick={() => setCreatePopup(null)}>cancel</button>
+              <button className="cp-create" onClick={submitCreatePopup}>
+                create
+              </button>
+            </div>
+          </div>
+        )}
 
         {clusterNamePopup && (
           <div
@@ -566,6 +703,21 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
                   </div>
                 </div>
               )}
+            </div>
+            <div>
+              <div className="dd-section-label">description</div>
+              <textarea
+                className="dd-desc"
+                rows={3}
+                placeholder="notes about this person..."
+                value={descDraft}
+                onChange={(e) => setDescDraft(e.target.value)}
+                onBlur={() => {
+                  if (descDraft !== (selected.description ?? '')) {
+                    saveDescription(selected.id, descDraft);
+                  }
+                }}
+              />
             </div>
             <button className="dd-delete-person" onClick={() => deletePerson(selected.id)}>
               delete person

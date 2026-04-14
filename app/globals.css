@@ -880,6 +880,90 @@ button {
 .cluster-name-popup input:focus {
   border-color: rgba(200, 220, 255, 0.6);
 }
+.create-popup {
+  position: fixed;
+  z-index: 30;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+  background: rgba(10, 12, 20, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  padding: 12px;
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(10px);
+}
+.create-popup .cp-head {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.6);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.create-popup input,
+.create-popup textarea {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #f0f0f0;
+  padding: 6px 10px;
+  border-radius: 5px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  outline: none;
+  resize: vertical;
+}
+.create-popup input:focus,
+.create-popup textarea:focus {
+  border-color: rgba(200, 220, 255, 0.5);
+}
+.create-popup .cp-bg,
+.create-popup .cp-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.create-popup .cp-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+.create-popup .cp-actions button {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #e0e0e0;
+  padding: 5px 12px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+.create-popup .cp-actions .cp-create {
+  background: rgba(140, 190, 255, 0.15);
+  border-color: rgba(180, 220, 255, 0.5);
+}
+.create-popup .cp-actions button:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+.detail-drawer .dd-desc {
+  width: 100%;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  outline: none;
+  resize: vertical;
+  min-height: 54px;
+}
+.detail-drawer .dd-desc:focus {
+  border-color: rgba(200, 220, 255, 0.4);
+}
 .detail-drawer .dd-connect {
   display: flex;
   flex-direction: column;

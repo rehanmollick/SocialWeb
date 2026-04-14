@@ -6,6 +6,7 @@ export const people = sqliteTable('people', {
   bg: text('bg').notNull().default('online'),
   strength: real('strength').notNull().default(5),
   tags: text('tags').notNull().default('[]'),
+  description: text('description').notNull().default(''),
   createdAt: integer('created_at').notNull().$defaultFn(() => Date.now()),
   updatedAt: integer('updated_at').notNull().$defaultFn(() => Date.now()),
 });
