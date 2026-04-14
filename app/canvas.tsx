@@ -1164,32 +1164,17 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         if (!st || st.a < 0.01) continue;
         const color = bgColors[bg];
         const radius = st.r * hazePulse;
-        const aa = st.a * 0.35; // heavy tone down
+        const aa = st.a * 0.12; // super subtle
 
         // soft body
         const body = ctx.createRadialGradient(st.x, st.y, 0, st.x, st.y, radius);
-        body.addColorStop(0, hexToRgba(color, 0.16 * aa));
-        body.addColorStop(0.5, hexToRgba(color, 0.07 * aa));
+        body.addColorStop(0, hexToRgba(color, 0.09 * aa));
+        body.addColorStop(0.5, hexToRgba(color, 0.04 * aa));
         body.addColorStop(1, hexToRgba(color, 0));
         ctx.fillStyle = body;
         ctx.beginPath();
         ctx.arc(st.x, st.y, radius, 0, Math.PI * 2);
         ctx.fill();
-
-        // faint tendrils (3 only)
-        for (let i = 0; i < 3; i++) {
-          const theta = (i / 3) * Math.PI * 2 + tSec * 0.1 + bg.length * 0.6;
-          const lx = st.x + Math.cos(theta) * radius * 0.32;
-          const ly = st.y + Math.sin(theta) * radius * 0.32;
-          const lr = radius * 0.5;
-          const lobe = ctx.createRadialGradient(lx, ly, 0, lx, ly, lr);
-          lobe.addColorStop(0, hexToRgba(color, 0.06 * aa));
-          lobe.addColorStop(1, hexToRgba(color, 0));
-          ctx.fillStyle = lobe;
-          ctx.beginPath();
-          ctx.arc(lx, ly, lr, 0, Math.PI * 2);
-          ctx.fill();
-        }
       }
       ctx.restore();
 
