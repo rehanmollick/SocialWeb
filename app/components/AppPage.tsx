@@ -457,6 +457,21 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
               </button>
             </div>
             <div>
+              <div className="dd-section-label">description</div>
+              <textarea
+                className="dd-desc"
+                rows={3}
+                placeholder="notes about this person..."
+                value={descDraft}
+                onChange={(e) => setDescDraft(e.target.value)}
+                onBlur={() => {
+                  if (descDraft !== (selected.description ?? '')) {
+                    saveDescription(selected.id, descDraft);
+                  }
+                }}
+              />
+            </div>
+            <div>
               <div className="dd-section-label">tags · click to toggle</div>
               <div className="dd-tags">
                 {TAG_KEYS.map((t) => {
@@ -649,21 +664,6 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
                   </div>
                 </div>
               )}
-            </div>
-            <div>
-              <div className="dd-section-label">description</div>
-              <textarea
-                className="dd-desc"
-                rows={3}
-                placeholder="notes about this person..."
-                value={descDraft}
-                onChange={(e) => setDescDraft(e.target.value)}
-                onBlur={() => {
-                  if (descDraft !== (selected.description ?? '')) {
-                    saveDescription(selected.id, descDraft);
-                  }
-                }}
-              />
             </div>
             <button className="dd-delete-person" onClick={() => deletePerson(selected.id)}>
               delete person

@@ -1697,13 +1697,15 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       ctx.restore();
 
       // ===== me edges (you -> every person with strength > 0) =====
+      // matches peer-edge scale so a strength-10 person with no peer links still reads as strong
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
       for (const n of gNodes) {
         if (n.s <= 0) continue;
         const norm = n.s / 10;
-        const alpha = Math.pow(norm, 1.1) * 0.55 + 0.05;
-        const width = (Math.pow(norm, 1.2) * 1.6 + 0.15) / currentTransform.k;
+        const pulseMul = n.s >= 7 ? 0.85 + 0.15 * Math.sin(tSec * 1.4 + n.s) : 1;
+        const alpha = (Math.pow(norm, 1.2) * 0.95 + 0.03) * pulseMul;
+        const width = (Math.pow(norm, 1.3) * 2.7 + 0.25) / currentTransform.k;
         ctx.strokeStyle = `rgba(220,225,255,${alpha})`;
         ctx.lineWidth = width;
         ctx.beginPath();
