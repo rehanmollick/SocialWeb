@@ -33,6 +33,8 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
   const [connecting, setConnecting] = useState(false);
   const [connectQuery, setConnectQuery] = useState('');
   const [connectStrength, setConnectStrength] = useState(3);
+  const [renamingBg, setRenamingBg] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
 
   const fetchGraph = useCallback(async () => {
     const res = await fetch('/api/graph', { cache: 'no-store' });
@@ -163,6 +165,19 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
     });
   };
 
+  const renameBucket = async (bg: string, name: string) => {
+    const trimmed = name.trim();
+    setRenamingBg(null);
+    setRenameValue('');
+    if (!trimmed) return;
+    await fetch(`/api/buckets/${encodeURIComponent(bg)}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: trimmed }),
+    });
+    await fetchGraph();
+  };
+
   const deleteEdge = async (a: number, b: number) => {
     await fetch('/api/edges', {
       method: 'DELETE',
@@ -177,7 +192,9 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
     acc[n.bg] = (acc[n.bg] ?? 0) + 1;
     return acc;
   }, {});
-  const topBuckets = Object.entries(bucketCount).sort((a, b) => b[1] - a[1]).slice(0, 4);
+  const topBuckets = Object.entries(bucketCount).sort((a, b) => b[1] - a[1]);
+  const customNames = graph.bucketNames ?? {};
+  const labelFor = (bg: string) => customNames[bg] ?? bgLabels[bg] ?? bg;
 
   const cls = ['app'];
   if (leftCollapsed) cls.push('left-collapsed');
@@ -202,12 +219,38 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
             graph · <b>{graph.nodes.length}</b> people · <b>{graph.edges.length}</b> edges
           </div>
           <div className="legend">
-            {topBuckets.map(([bg, n]) => (
-              <span key={bg}>
-                <i style={{ background: bgColors[bg] ?? '#8fc08f' }} />
-                {bgLabels[bg] ?? bg} · {n}
-              </span>
-            ))}
+            {topBuckets.map(([bg, n]) =>
+              renamingBg === bg ? (
+                <input
+                  key={bg}
+                  className="legend-rename"
+                  autoFocus
+                  value={renameValue}
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') renameBucket(bg, renameValue);
+                    if (e.key === 'Escape') {
+                      setRenamingBg(null);
+                      setRenameValue('');
+                    }
+                  }}
+                  onBlur={() => renameBucket(bg, renameValue)}
+                />
+              ) : (
+                <span
+                  key={bg}
+                  className="legend-chip"
+                  title="click to rename"
+                  onClick={() => {
+                    setRenamingBg(bg);
+                    setRenameValue(labelFor(bg));
+                  }}
+                >
+                  <i style={{ background: bgColors[bg] ?? '#8fc08f' }} />
+                  {labelFor(bg)} · {n}
+                </span>
+              )
+            )}
           </div>
         </div>
 
@@ -245,7 +288,7 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
               <div>
                 <div className="dd-name">{selected.name}</div>
                 <div className="dd-sub">
-                  {bgLabels[selected.bg] ?? selected.bg} · {bgSubtitle[selected.bg] ?? ''}
+                  {labelFor(selected.bg)} · {bgSubtitle[selected.bg] ?? ''}
                 </div>
               </div>
               <button className="dd-close" onClick={() => setSelected(null)}>
@@ -292,7 +335,7 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
                       }}
                     >
                       <i style={{ background: bgColors[bg] ?? '#8fc08f' }} />
-                      {bgLabels[bg] ?? bg}
+                      {labelFor(bg)}
                     </span>
                   );
                 })}

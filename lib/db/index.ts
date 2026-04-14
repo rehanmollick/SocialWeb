@@ -44,6 +44,10 @@ sqlite.exec(`
     deleted INTEGER NOT NULL DEFAULT 0,
     UNIQUE(a_id, b_id)
   );
+  CREATE TABLE IF NOT EXISTS bucket_names (
+    bg TEXT PRIMARY KEY,
+    name TEXT NOT NULL
+  );
 `);
 
 export const db = drizzle(sqlite, { schema });

@@ -22,6 +22,9 @@ export async function GET() {
   const allPeople = await db.query.people.findMany();
   const allMentions = await db.query.mentions.findMany();
   const overrides = await db.query.edgeOverrides.findMany();
+  const bucketRows = await db.query.bucketNames.findMany();
+  const bucketNames: Record<string, string> = {};
+  for (const r of bucketRows) bucketNames[r.bg] = r.name;
 
   const nodes: GraphNode[] = allPeople.map((p) => ({
     id: p.id,
@@ -95,7 +98,7 @@ export async function GET() {
     emitted.add(k);
   }
 
-  return NextResponse.json({ nodes, edges });
+  return NextResponse.json({ nodes, edges, bucketNames });
 }
 
 function safeTags(json: string): string[] {

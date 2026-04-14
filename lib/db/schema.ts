@@ -30,8 +30,14 @@ export const edgeOverrides = sqliteTable('edge_overrides', {
   deleted: integer('deleted', { mode: 'boolean' }).notNull().default(false),
 });
 
+export const bucketNames = sqliteTable('bucket_names', {
+  bg: text('bg').primaryKey(),
+  name: text('name').notNull(),
+});
+
 export type Person = typeof people.$inferSelect;
 export type NewPerson = typeof people.$inferInsert;
 export type Thought = typeof thoughts.$inferSelect;
 export type Mention = typeof mentions.$inferSelect;
 export type EdgeOverride = typeof edgeOverrides.$inferSelect;
+export type BucketName = typeof bucketNames.$inferSelect;
