@@ -466,7 +466,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, focusId }: 
 
       sim.nodes(gNodes);
       linkForce.links(gLinks);
-      sim.alpha(0.18).restart();
+      sim.alpha(0.1).restart();
     };
 
     // ===== zoom/pan =====
@@ -1025,7 +1025,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, focusId }: 
       for (const l of gLinks) {
         const s = l.strength;
         const norm = s / 10;
-        const alpha = Math.pow(norm, 1.2) * 0.95 + 0.03;
+        const pulseMul = s >= 7 ? 0.85 + 0.15 * Math.sin(tSec * 1.4 + s) : 1;
+        const alpha = (Math.pow(norm, 1.2) * 0.95 + 0.03) * pulseMul;
         const width = (Math.pow(norm, 1.3) * 2.7 + 0.25) / currentTransform.k;
         ctx.strokeStyle = `rgba(255,255,255,${alpha})`;
         ctx.lineWidth = width;
@@ -1132,6 +1133,42 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, focusId }: 
           ctx.moveTo(x - dOff, y + dOff);
           ctx.lineTo(x + dOff, y - dOff);
           ctx.stroke();
+          ctx.restore();
+          // ===== orbital rings =====
+          ctx.save();
+          ctx.globalCompositeOperation = 'lighter';
+          const phase = n._starPhase || 0;
+          const ringR1 = r * 3.2;
+          const ringR2 = r * 4.4;
+          const ring1A = 0.22 + 0.08 * Math.sin(tSec * 1.1 + phase);
+          const ring2A = 0.13 + 0.06 * Math.sin(tSec * 0.6 + phase + 1.2);
+          ctx.strokeStyle = `rgba(255,240,200,${ring1A})`;
+          ctx.lineWidth = 0.7 / currentTransform.k;
+          ctx.beginPath();
+          ctx.ellipse(x, y, ringR1, ringR1 * 0.36, phase * 0.3, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.strokeStyle = `rgba(200,220,255,${ring2A})`;
+          ctx.lineWidth = 0.55 / currentTransform.k;
+          ctx.beginPath();
+          ctx.ellipse(x, y, ringR2, ringR2 * 0.3, -phase * 0.25 + 0.8, 0, Math.PI * 2);
+          ctx.stroke();
+          // orbiting satellite dots on the first ring
+          const sat1Ang = tSec * 0.9 + phase;
+          const sat2Ang = tSec * 0.9 + phase + Math.PI;
+          const satPos = (ang: number) => {
+            const cos = Math.cos(phase * 0.3);
+            const sin = Math.sin(phase * 0.3);
+            const lx = Math.cos(ang) * ringR1;
+            const ly = Math.sin(ang) * ringR1 * 0.36;
+            return { x: x + lx * cos - ly * sin, y: y + lx * sin + ly * cos };
+          };
+          const sats = [satPos(sat1Ang), satPos(sat2Ang)];
+          ctx.fillStyle = 'rgba(255,245,220,0.75)';
+          for (const s of sats) {
+            ctx.beginPath();
+            ctx.arc(s.x, s.y, 0.9 / currentTransform.k, 0, Math.PI * 2);
+            ctx.fill();
+          }
           ctx.restore();
           const coreR = r * 1.1;
           const core = ctx.createRadialGradient(x, y, 0, x, y, coreR);
