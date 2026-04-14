@@ -353,8 +353,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, focusId }: 
       for (const n of gNodes) {
         if (n._ax == null || n._ay == null) continue;
         if (n.fx != null) continue;
-        n.vx = (n.vx ?? 0) + (n._ax - (n.x ?? 0)) * 0.02;
-        n.vy = (n.vy ?? 0) + (n._ay - (n.y ?? 0)) * 0.02;
+        n.vx = (n.vx ?? 0) + (n._ax - (n.x ?? 0)) * 0.22;
+        n.vy = (n.vy ?? 0) + (n._ay - (n.y ?? 0)) * 0.22;
       }
     };
 
@@ -362,17 +362,17 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, focusId }: 
       .forceLink<SimNode, SimLink>(gLinks)
       .id((d) => d.id)
       .distance((l) => 80 / Math.sqrt(l.weight || 1))
-      .strength(0.3);
+      .strength(0.05);
 
     const sim = d3
       .forceSimulation<SimNode>(gNodes)
-      .force('charge', d3.forceManyBody<SimNode>().strength(-180))
+      .force('charge', d3.forceManyBody<SimNode>().strength(-40))
       .force('link', linkForce)
-      .force('collide', d3.forceCollide<SimNode>().radius((n) => 8 + n.s * 0.7))
+      .force('collide', d3.forceCollide<SimNode>().radius((n) => 8 + n.s * 0.7).strength(0.6))
       .force('anchor', anchorForce)
       .alpha(0)
-      .alphaDecay(0.04)
-      .velocityDecay(0.55);
+      .alphaDecay(0.06)
+      .velocityDecay(0.72);
     sim.stop();
 
     // lay out ONE bucket's nodes into concentric rings around its center.
@@ -471,9 +471,36 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, focusId }: 
 
     // ===== zoom/pan =====
     const currentTransform = { x: width / 2, y: height / 2, k: 1 };
+    const hitNodeAt = (clientX: number, clientY: number): SimNode | null => {
+      const rect = canvas.getBoundingClientRect();
+      const mx = clientX - rect.left;
+      const my = clientY - rect.top;
+      const wx = (mx - currentTransform.x) / currentTransform.k;
+      const wy = (my - currentTransform.y) / currentTransform.k;
+      let best: SimNode | null = null;
+      let bestD = 22 * 22;
+      for (const n of gNodes) {
+        const dx = (n.x ?? 0) - wx;
+        const dy = (n.y ?? 0) - wy;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < bestD) {
+          bestD = d2;
+          best = n;
+        }
+      }
+      return best;
+    };
     const zoom = d3
       .zoom<HTMLCanvasElement, unknown>()
       .scaleExtent([0.25, 4])
+      .filter((ev) => {
+        if (ev.type === 'wheel') return !ev.ctrlKey;
+        if (ev.button && ev.button !== 0) return false;
+        const cx = (ev as PointerEvent).clientX ?? (ev as MouseEvent).clientX;
+        const cy = (ev as PointerEvent).clientY ?? (ev as MouseEvent).clientY;
+        if (cx == null || cy == null) return true;
+        return hitNodeAt(cx, cy) == null;
+      })
       .on('zoom', (ev) => {
         currentTransform.x = ev.transform.x;
         currentTransform.y = ev.transform.y;
