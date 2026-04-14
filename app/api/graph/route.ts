@@ -26,7 +26,11 @@ export async function GET() {
   const overrides = await db.query.edgeOverrides.findMany();
   const bucketRows = await db.query.bucketNames.findMany();
   const bucketNames: Record<string, string> = {};
-  for (const r of bucketRows) bucketNames[r.bg] = r.name;
+  const bucketRopes: Record<string, { weight: number | null; hidden: boolean }> = {};
+  for (const r of bucketRows) {
+    if (r.name) bucketNames[r.bg] = r.name;
+    bucketRopes[r.bg] = { weight: r.meWeight, hidden: !!r.meHidden };
+  }
 
   const nodes: GraphNode[] = allPeople.map((p) => ({
     id: p.id,
@@ -79,7 +83,7 @@ export async function GET() {
     emitted.add(k);
   }
 
-  return NextResponse.json({ nodes, edges, bucketNames });
+  return NextResponse.json({ nodes, edges, bucketNames, bucketRopes });
 }
 
 function safeTags(json: string): string[] {

@@ -835,6 +835,23 @@ button {
   color: #e89999;
   border-color: #e89999;
 }
+.detail-drawer .dd-reset {
+  background: transparent;
+  border: 1px dashed var(--border);
+  color: var(--fg-muted);
+  padding: 5px 8px;
+  margin-top: 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.detail-drawer .dd-reset:hover {
+  color: #ccd;
+  border-color: #99a;
+}
 .detail-drawer .dd-connect-btn {
   background: transparent;
   border: 1px dashed var(--border);

@@ -34,7 +34,9 @@ export const edgeOverrides = sqliteTable('edge_overrides', {
 
 export const bucketNames = sqliteTable('bucket_names', {
   bg: text('bg').primaryKey(),
-  name: text('name').notNull(),
+  name: text('name').notNull().default(''),
+  meWeight: real('me_weight'),
+  meHidden: integer('me_hidden', { mode: 'boolean' }).notNull().default(false),
 });
 
 export type Person = typeof people.$inferSelect;

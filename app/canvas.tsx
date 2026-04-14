@@ -17,6 +17,7 @@ export type GraphPayload = {
   nodes: GraphNode[];
   edges: GraphEdge[];
   bucketNames?: Record<string, string>;
+  bucketRopes?: Record<string, { weight: number | null; hidden: boolean }>;
 };
 
 type SimNode = GraphNode &
@@ -212,10 +213,14 @@ type GraphCanvasProps = {
   onClusterClick?: (bg: string, screenX: number, screenY: number) => void;
   onHazeFaded?: (bg: string) => void;
   onConnect?: (aId: number, bId: number) => void;
+  onPinToMe?: (id: number) => void;
+  onSelectRope?: (sel: RopeSelection | null) => void;
   onCreateAt?: (screenX: number, screenY: number, bg: string) => void;
   onMoveGroup?: (ids: number[]) => void;
   focusId?: number | null;
 };
+
+export type RopeSelection = { bg: string };
 
 type Runtime = {
   canvas: HTMLCanvasElement;
@@ -230,7 +235,7 @@ function primaryTagOf(tags: string[]): string {
   return 'friends';
 }
 
-export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterClick, onHazeFaded, onConnect, onCreateAt, onMoveGroup, focusId }: GraphCanvasProps) {
+export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterClick, onHazeFaded, onConnect, onPinToMe, onSelectRope, onCreateAt, onMoveGroup, focusId }: GraphCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const onSelectRef = useRef(onSelect);
@@ -238,6 +243,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
   const onClusterClickRef = useRef(onClusterClick);
   const onHazeFadedRef = useRef(onHazeFaded);
   const onConnectRef = useRef(onConnect);
+  const onPinToMeRef = useRef(onPinToMe);
+  const onSelectRopeRef = useRef(onSelectRope);
   const onCreateAtRef = useRef(onCreateAt);
   const onMoveGroupRef = useRef(onMoveGroup);
   const runtimeRef = useRef<Runtime | null>(null);
@@ -247,6 +254,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
   onClusterClickRef.current = onClusterClick;
   onHazeFadedRef.current = onHazeFaded;
   onConnectRef.current = onConnect;
+  onPinToMeRef.current = onPinToMe;
+  onSelectRopeRef.current = onSelectRope;
   onCreateAtRef.current = onCreateAt;
   onMoveGroupRef.current = onMoveGroup;
   graphRef.current = graph;
@@ -573,6 +582,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     // ===== persistent data arrays (mutated across graph updates) =====
     const gNodes: SimNode[] = [];
     const gLinks: SimLink[] = [];
+    // rope hit-test segments rebuilt every frame during draw. world coords.
+    let ropeHitSegs: Array<{ bg: string; x: number; y: number }> = [];
 
     const anchorForce = () => {
       for (const n of gNodes) {
@@ -596,7 +607,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       .forceSimulation<SimNode>(gNodes)
       .force('charge', d3.forceManyBody<SimNode>().strength(-40))
       .force('link', linkForce)
-      .force('collide', d3.forceCollide<SimNode>().radius((n) => 8 + n.s * 0.7).strength(0.6))
+      .force('collide', d3.forceCollide<SimNode>().radius((n) => 9 + n.s * 1.2).strength(0.65))
       .force('anchor', anchorForce)
       .alpha(0)
       .alphaDecay(0.06)
@@ -613,7 +624,10 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     ) => {
       const c = centerOverride ?? bgCenters[bg] ?? bgCenters.online;
       const unpinned = bucket.filter((n) => !n._pinned);
-      unpinned.sort((a, b) => b.s - a.s || a.name.localeCompare(b.name));
+      // stable alphabetical — strength drives size only, not slot. otherwise
+      // stronger people get pulled toward inner rings, which looks like
+      // centrality bias.
+      unpinned.sort((a, b) => a.name.localeCompare(b.name));
       const total = unpinned.length;
       if (total === 0) return;
       // orient each bucket so the "top" vertex is always up in its local frame
@@ -896,9 +910,15 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     sel.call(drag);
 
     // ===== shift+drag to connect two dots =====
+    // also: shift+drag from the "you" origin (within 28 world-units of 0,0)
+    // to a dot — pins that dot as a direct line from you. shift+drag from a
+    // dot to near the origin does the same in reverse.
     let connectSource: SimNode | null = null;
+    let connectFromYou = false;
     let connectMouseW = { x: 0, y: 0 };
     let justConnected = false;
+    const YOU_HIT_R2 = 28 * 28;
+    const nearYou = (wx: number, wy: number) => wx * wx + wy * wy <= YOU_HIT_R2;
     const screenToWorld = (clientX: number, clientY: number) => {
       const rect = canvas.getBoundingClientRect();
       const mx = clientX - rect.left;
@@ -971,9 +991,17 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       // shift+drag to connect
       if (!ev.shiftKey) return;
       const hit = hitNodeAt(ev.clientX, ev.clientY);
-      if (!hit) return;
-      connectSource = hit;
-      connectMouseW = screenToWorld(ev.clientX, ev.clientY);
+      const w = screenToWorld(ev.clientX, ev.clientY);
+      if (hit) {
+        connectSource = hit;
+        connectFromYou = false;
+      } else if (nearYou(w.x, w.y)) {
+        connectSource = null;
+        connectFromYou = true;
+      } else {
+        return;
+      }
+      connectMouseW = w;
       try {
         canvas.setPointerCapture(ev.pointerId);
       } catch {}
@@ -1002,7 +1030,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         ev.stopPropagation();
         return;
       }
-      if (!connectSource) return;
+      if (!connectSource && !connectFromYou) return;
       connectMouseW = screenToWorld(ev.clientX, ev.clientY);
       ev.stopPropagation();
     };
@@ -1047,11 +1075,32 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         ev.stopPropagation();
         return;
       }
+      if (connectFromYou) {
+        const target = hitNodeAt(ev.clientX, ev.clientY);
+        if (target) {
+          onPinToMeRef.current?.(target.id);
+          justConnected = true;
+        }
+        connectFromYou = false;
+        try {
+          canvas.releasePointerCapture(ev.pointerId);
+        } catch {}
+        ev.stopPropagation();
+        return;
+      }
       if (!connectSource) return;
       const target = hitNodeAt(ev.clientX, ev.clientY);
       if (target && target.id !== connectSource.id) {
         onConnectRef.current?.(connectSource.id, target.id);
         justConnected = true;
+      } else if (!target) {
+        // dropped in empty space — if near the you-origin, interpret as
+        // "give this dot a direct line to me"
+        const w = screenToWorld(ev.clientX, ev.clientY);
+        if (nearYou(w.x, w.y)) {
+          onPinToMeRef.current?.(connectSource.id);
+          justConnected = true;
+        }
       }
       connectSource = null;
       try {
@@ -1125,6 +1174,32 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         const s = bestEdge.source as SimNode;
         const t = bestEdge.target as SimNode;
         onSelectEdgeRef.current?.({ a: s.id, b: t.id, weight: bestEdge.weight });
+        onSelectRopeRef.current?.(null);
+        return;
+      }
+
+      // me-rope hit test: point-to-segment distance from origin → haze centroid
+      let bestRope: string | null = null;
+      let bestRopeDist = 16 / currentTransform.k;
+      for (const seg of ropeHitSegs) {
+        const dx = seg.x;
+        const dy = seg.y;
+        const len2 = dx * dx + dy * dy;
+        if (len2 < 0.01) continue;
+        const u = (wx * dx + wy * dy) / len2;
+        if (u < 0.05 || u > 0.95) continue; // avoid the origin/haze endpoints
+        const px = u * dx;
+        const py = u * dy;
+        const d = Math.hypot(wx - px, wy - py);
+        if (d < bestRopeDist) {
+          bestRopeDist = d;
+          bestRope = seg.bg;
+        }
+      }
+      if (bestRope) {
+        onSelectRopeRef.current?.({ bg: bestRope });
+        onSelectEdgeRef.current?.(null);
+        onSelectRef.current?.(null);
         return;
       }
 
@@ -1153,6 +1228,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
 
       onSelectRef.current?.(null);
       onSelectEdgeRef.current?.(null);
+      onSelectRopeRef.current?.(null);
     };
     canvas.addEventListener('click', onClick);
 
@@ -1957,20 +2033,27 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       const ropeAgg: Record<string, RopeAgg> = {};
       for (const n of gNodes) {
         if (n.pinToMe) continue;
-        if (n.bg === 'online') continue;
+        // every non-empty bucket gets a rope — subgroups that form on the fly
+        // need a visible tie to "you" right away.
         const a = (ropeAgg[n.bg] ||= { sumS: 0, n: 0 });
         a.sumS += n.s;
         a.n += 1;
       }
+      const bucketRopes = graphRef.current.bucketRopes ?? {};
+      ropeHitSegs = [];
       for (const bg of Object.keys(ropeAgg)) {
         const agg = ropeAgg[bg];
         if (agg.n < 1) continue;
         const st = hazeState[bg];
         if (!st || st.a < 0.05) continue;
+        const override = bucketRopes[bg];
+        if (override?.hidden) continue;
         const avgS = agg.sumS / agg.n;
-        const norm = avgS / 10;
+        // user-set weight wins; otherwise fall back to the live avg strength
+        const displayS = override?.weight != null ? override.weight : avgS;
+        const norm = displayS / 10;
         const sizeBoost = Math.min(1.4, 0.85 + Math.log10(agg.n + 1) * 0.45);
-        const pulseMul = avgS >= 7 ? 0.88 + 0.12 * Math.sin(tSec * 1.4 + avgS) : 1;
+        const pulseMul = displayS >= 7 ? 0.88 + 0.12 * Math.sin(tSec * 1.4 + displayS) : 1;
         const alpha = (Math.pow(norm, 1.1) * 0.55 + 0.08) * pulseMul * Math.min(1, st.a * 1.4);
         const width = ((Math.pow(norm, 1.2) * 4 + 0.6) * sizeBoost) / currentTransform.k;
         ctx.strokeStyle = `rgba(220,225,255,${alpha})`;
@@ -1979,6 +2062,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         ctx.moveTo(0, 0);
         ctx.lineTo(st.x, st.y);
         ctx.stroke();
+        ropeHitSegs.push({ bg, x: st.x, y: st.y });
       }
 
       // pinned direct lines (and any non-clustered/online pinned)
@@ -2015,13 +2099,13 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       }
 
       // ===== in-progress connect line (shift+drag) =====
-      if (connectSource) {
-        const sx = connectSource.x ?? 0;
-        const sy = connectSource.y ?? 0;
+      if (connectSource || connectFromYou) {
+        const sx = connectFromYou ? 0 : connectSource!.x ?? 0;
+        const sy = connectFromYou ? 0 : connectSource!.y ?? 0;
         ctx.save();
         ctx.globalCompositeOperation = 'lighter';
-        ctx.strokeStyle = 'rgba(180,220,255,0.85)';
-        ctx.lineWidth = 1.8 / currentTransform.k;
+        ctx.strokeStyle = connectFromYou ? 'rgba(220,235,255,0.9)' : 'rgba(180,220,255,0.85)';
+        ctx.lineWidth = (connectFromYou ? 2.4 : 1.8) / currentTransform.k;
         ctx.setLineDash([6 / currentTransform.k, 4 / currentTransform.k]);
         ctx.beginPath();
         ctx.moveTo(sx, sy);
@@ -2032,7 +2116,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           connectMouseW.x * currentTransform.k + currentTransform.x + canvas.getBoundingClientRect().left,
           connectMouseW.y * currentTransform.k + currentTransform.y + canvas.getBoundingClientRect().top
         );
-        if (hoverTarget && hoverTarget.id !== connectSource.id) {
+        if (hoverTarget && (connectFromYou || hoverTarget.id !== connectSource!.id)) {
           const tx = hoverTarget.x ?? 0;
           const ty = hoverTarget.y ?? 0;
           ctx.strokeStyle = 'rgba(180,255,220,0.9)';
@@ -2105,7 +2189,10 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
 
       // ===== people nodes =====
       for (const n of gNodes) {
-        const r = 5 + (n.s / 10) * 2.5;
+        // stronger tie to me → bigger dot. wide range so the hierarchy reads
+        // at a glance without having to inspect. collide force already scales
+        // per-node so bigger dots push each other apart naturally.
+        const r = 4.5 + (n.s / 10) * 7;
         const tags = n.tags;
         const isStar = tags.includes('highagency');
         const x = n.x ?? 0;
@@ -2296,33 +2383,33 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         }
 
         // ===== name label =====
-        // for stars: bright white, bigger, below the glow, with dark stroke for contrast
-        // for regulars: gray, smaller, close to node
+        // names are load-bearing — readable at a glance trumps subtle. bold,
+        // bright, wide dark stroke so they pop on any background.
         const firstName = n.name.split(' ')[0];
         if (isStar) {
           const traitForLabel = tags.filter((t) => t !== 'highagency' && t in tagColors);
           const labelTint = traitForLabel.length > 0 ? tagColors[traitForLabel[0]] : '#fff5d8';
-          const fs = 12 / currentTransform.k;
+          const fs = 15 / currentTransform.k;
           const ly = y + r * 6.2;
+          ctx.font = `700 ${fs}px Inter, sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.lineWidth = 4 / currentTransform.k;
+          ctx.strokeStyle = 'rgba(0,0,0,0.95)';
+          ctx.strokeText(firstName, x, ly);
+          ctx.fillStyle = hexToRgba(labelTint, 1);
+          ctx.fillText(firstName, x, ly);
+        } else {
+          const fs = 13 / currentTransform.k;
+          const ly = y - r - 7 / currentTransform.k;
           ctx.font = `600 ${fs}px Inter, sans-serif`;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          ctx.lineWidth = 3 / currentTransform.k;
-          ctx.strokeStyle = 'rgba(0,0,0,0.9)';
+          ctx.lineWidth = 3.5 / currentTransform.k;
+          ctx.strokeStyle = 'rgba(0,0,0,0.92)';
           ctx.strokeText(firstName, x, ly);
-          ctx.fillStyle = hexToRgba(labelTint, 0.98);
-          ctx.fillText(firstName, x, ly);
-        } else {
-          const fs = 10 / currentTransform.k;
-          const ly = y - r - 6 / currentTransform.k;
-          ctx.font = `500 ${fs}px Inter, sans-serif`;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.lineWidth = 2.5 / currentTransform.k;
-          ctx.strokeStyle = 'rgba(0,0,0,0.8)';
-          ctx.strokeText(firstName, x, ly);
-          const alpha = n.s === 0 ? 0.7 : Math.min(0.95, 0.55 + n.s * 0.045);
-          ctx.fillStyle = `rgba(210,210,215,${alpha})`;
+          const alpha = Math.min(1, 0.82 + n.s * 0.018);
+          ctx.fillStyle = `rgba(240,242,248,${alpha})`;
           ctx.fillText(firstName, x, ly);
         }
       }

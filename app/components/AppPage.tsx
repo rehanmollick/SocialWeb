@@ -7,6 +7,7 @@ import GraphCanvas, {
   type GraphNode,
   type GraphPayload,
   type EdgeSelection,
+  type RopeSelection,
 } from '../canvas';
 
 const TAG_KEYS = ['highagency', 'highsignal', 'interesting', 'fun', 'friends', 'important', 'helpful', 'boring'] as const;
@@ -22,6 +23,7 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
   const [graph, setGraph] = useState<GraphPayload>({ nodes: [], edges: [] });
   const [selected, setSelected] = useState<GraphNode | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<EdgeSelection | null>(null);
+  const [selectedRope, setSelectedRope] = useState<RopeSelection | null>(null);
   const [focusId, setFocusId] = useState<number | null>(null);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
@@ -298,6 +300,43 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
     await fetchGraph();
   };
 
+  const pinToMeById = async (id: number) => {
+    const target = graph.nodes.find((n) => n.id === id);
+    if (!target) return;
+    const next = !target.pinToMe;
+    setGraph((g) => ({
+      ...g,
+      nodes: g.nodes.map((n) => (n.id === id ? { ...n, pinToMe: next } : n)),
+    }));
+    await fetch(`/api/people/${id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pinToMe: next }),
+    });
+  };
+
+  const patchRope = async (bg: string, patch: { meWeight?: number | null; meHidden?: boolean }) => {
+    setGraph((g) => {
+      const next = { ...(g.bucketRopes ?? {}) };
+      const existing = next[bg] ?? { weight: null, hidden: false };
+      next[bg] = {
+        weight: 'meWeight' in patch ? (patch.meWeight ?? null) : existing.weight,
+        hidden: 'meHidden' in patch ? !!patch.meHidden : existing.hidden,
+      };
+      return { ...g, bucketRopes: next };
+    });
+    await fetch(`/api/buckets/${bg}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+  };
+
+  const hideRope = async (bg: string) => {
+    await patchRope(bg, { meHidden: true });
+    setSelectedRope(null);
+  };
+
   const customNames = graph.bucketNames ?? {};
   // only custom names — presets intentionally empty so clusters stay unnamed until the user names them.
   const labelFor = (bg: string) => customNames[bg] ?? '';
@@ -308,6 +347,19 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
 
   const edgePeopleA = selectedEdge ? graph.nodes.find((n) => n.id === selectedEdge.a) : null;
   const edgePeopleB = selectedEdge ? graph.nodes.find((n) => n.id === selectedEdge.b) : null;
+
+  const ropeBucketMembers = selectedRope
+    ? graph.nodes.filter((n) => n.bg === selectedRope.bg && !n.pinToMe)
+    : [];
+  const ropeAvgS =
+    ropeBucketMembers.length > 0
+      ? ropeBucketMembers.reduce((s, n) => s + n.strength, 0) / ropeBucketMembers.length
+      : 5;
+  const ropeOverride =
+    selectedRope && graph.bucketRopes ? graph.bucketRopes[selectedRope.bg] : undefined;
+  const ropeDisplayWeight = ropeOverride?.weight ?? ropeAvgS;
+  const ropeLabel =
+    selectedRope && (customNames[selectedRope.bg] || selectedRope.bg);
 
   return (
     <div className={cls.join(' ')}>
@@ -394,11 +446,19 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
             setConnectQuery('');
           }}
           onSelectEdge={pickEdge}
+          onSelectRope={(r) => {
+            setSelectedRope(r);
+            if (r) {
+              setSelected(null);
+              setSelectedEdge(null);
+            }
+          }}
           onClusterClick={(bg, sx, sy) => {
             setClusterNamePopup({ bg, x: sx, y: sy, value: '' });
           }}
           onHazeFaded={handleHazeFaded}
           onConnect={handleConnect}
+          onPinToMe={pinToMeById}
           onCreateAt={(sx, sy, bg) => {
             setCreatePopup({ x: sx, y: sy, bg, name: '', description: '', tags: [] });
           }}
@@ -774,6 +834,47 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
             </div>
             <button className="dd-delete-person" onClick={() => deletePerson(selected.id)}>
               delete person
+            </button>
+          </div>
+        )}
+
+        {selectedRope && (
+          <div className="detail-drawer">
+            <div className="dd-head">
+              <div>
+                <div className="dd-name">
+                  you <span style={{ color: 'var(--fg-muted)' }}>→</span> {ropeLabel}
+                </div>
+                <div className="dd-sub">cluster rope</div>
+              </div>
+              <button className="dd-close" onClick={() => setSelectedRope(null)}>
+                ×
+              </button>
+            </div>
+            <div>
+              <div className="dd-section-label">strength</div>
+              <div className="dd-strength">
+                <input
+                  type="range"
+                  min={0}
+                  max={10}
+                  step={0.5}
+                  value={ropeDisplayWeight}
+                  onChange={(e) => patchRope(selectedRope.bg, { meWeight: Number(e.target.value) })}
+                />
+                <span className="dd-strength-val">{ropeDisplayWeight.toFixed(1)}</span>
+              </div>
+              {ropeOverride?.weight != null && (
+                <button
+                  className="dd-reset"
+                  onClick={() => patchRope(selectedRope.bg, { meWeight: null })}
+                >
+                  reset to avg ({ropeAvgS.toFixed(1)})
+                </button>
+              )}
+            </div>
+            <button className="dd-delete-person" onClick={() => hideRope(selectedRope.bg)}>
+              hide rope
             </button>
           </div>
         )}

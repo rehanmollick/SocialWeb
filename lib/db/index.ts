@@ -60,5 +60,14 @@ if (!peopleCols.some((c) => c.name === 'pin_to_me')) {
   sqlite.exec("ALTER TABLE people ADD COLUMN pin_to_me INTEGER NOT NULL DEFAULT 0");
 }
 
+// runtime migration: bucket rope overrides
+const bucketCols = sqlite.prepare("PRAGMA table_info(bucket_names)").all() as { name: string }[];
+if (!bucketCols.some((c) => c.name === 'me_weight')) {
+  sqlite.exec("ALTER TABLE bucket_names ADD COLUMN me_weight REAL");
+}
+if (!bucketCols.some((c) => c.name === 'me_hidden')) {
+  sqlite.exec("ALTER TABLE bucket_names ADD COLUMN me_hidden INTEGER NOT NULL DEFAULT 0");
+}
+
 export const db = drizzle(sqlite, { schema });
 export { schema };
