@@ -989,6 +989,27 @@ button {
 .detail-drawer .dd-desc:focus {
   border-color: rgba(200, 220, 255, 0.4);
 }
+.detail-drawer .dd-pin {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+  padding: 7px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  width: 100%;
+  text-align: left;
+  transition: color 0.15s, border-color 0.15s;
+}
+.detail-drawer .dd-pin:hover {
+  color: var(--fg);
+  border-color: var(--border-strong);
+}
+.detail-drawer .dd-pin.active {
+  color: #e8d8a0;
+  border-color: rgba(232, 216, 160, 0.5);
+}
 .detail-drawer .dd-connect {
   display: flex;
   flex-direction: column;

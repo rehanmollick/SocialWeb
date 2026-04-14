@@ -171,6 +171,20 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
     await fetchGraph();
   };
 
+  const togglePinToMe = async (id: number) => {
+    const next = !(selected?.pinToMe ?? false);
+    setSelected((prev) => (prev && prev.id === id ? { ...prev, pinToMe: next } : prev));
+    setGraph((g) => ({
+      ...g,
+      nodes: g.nodes.map((n) => (n.id === id ? { ...n, pinToMe: next } : n)),
+    }));
+    await fetch(`/api/people/${id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pinToMe: next }),
+    });
+  };
+
   const connectTo = async (a: number, b: number, weight: number) => {
     if (a === b) return;
     await fetch('/api/edges', {
@@ -554,6 +568,14 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
                   }
                 }}
               />
+            </div>
+            <div>
+              <button
+                className={`dd-pin${selected.pinToMe ? ' active' : ''}`}
+                onClick={() => togglePinToMe(selected.id)}
+              >
+                {selected.pinToMe ? '★ pinned to you' : '☆ pin direct line to you'}
+              </button>
             </div>
             <div>
               <div className="dd-section-label">tags · click to toggle</div>

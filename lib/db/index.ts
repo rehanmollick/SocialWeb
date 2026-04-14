@@ -51,10 +51,13 @@ sqlite.exec(`
   );
 `);
 
-// runtime migration: add description column if missing
+// runtime migration: add description + pin_to_me columns if missing
 const peopleCols = sqlite.prepare("PRAGMA table_info(people)").all() as { name: string }[];
 if (!peopleCols.some((c) => c.name === 'description')) {
   sqlite.exec("ALTER TABLE people ADD COLUMN description TEXT NOT NULL DEFAULT ''");
+}
+if (!peopleCols.some((c) => c.name === 'pin_to_me')) {
+  sqlite.exec("ALTER TABLE people ADD COLUMN pin_to_me INTEGER NOT NULL DEFAULT 0");
 }
 
 export const db = drizzle(sqlite, { schema });

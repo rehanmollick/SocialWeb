@@ -12,6 +12,7 @@ type SnapshotPerson = {
   strength: number;
   tags: string[];
   description: string;
+  pinToMe: boolean;
 };
 
 type SnapshotThought = {
@@ -72,6 +73,7 @@ export async function GET() {
       strength: p.strength,
       tags: safeTags(p.tags),
       description: p.description ?? '',
+      pinToMe: !!p.pinToMe,
     })),
     thoughts: allThoughts.map((t) => ({
       body: t.body,
@@ -143,6 +145,7 @@ export async function POST(req: Request) {
             : 5,
         tags: JSON.stringify(tags),
         description: typeof p.description === 'string' ? p.description : '',
+        pinToMe: !!p.pinToMe,
         createdAt: now,
         updatedAt: now,
       })

@@ -17,6 +17,7 @@ export async function PATCH(req: Request, { params }: Ctx) {
     bg?: string;
     description?: string;
     name?: string;
+    pinToMe?: boolean;
   };
 
   const patch: Record<string, unknown> = { updatedAt: Date.now() };
@@ -25,6 +26,7 @@ export async function PATCH(req: Request, { params }: Ctx) {
   if (typeof body.bg === 'string') patch.bg = body.bg;
   if (typeof body.description === 'string') patch.description = body.description;
   if (typeof body.name === 'string' && body.name.trim()) patch.name = body.name.trim();
+  if (typeof body.pinToMe === 'boolean') patch.pinToMe = body.pinToMe;
 
   await db.update(schema.people).set(patch).where(eq(schema.people.id, id));
   return NextResponse.json({ ok: true });

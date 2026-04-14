@@ -11,6 +11,9 @@ import {
   renameCluster,
   deletePerson,
   connectCluster,
+  disconnectCluster,
+  pinToMe,
+  unpinFromMe,
   getGraphSnapshot,
   type ToolResult,
 } from '@/lib/commands';
@@ -27,7 +30,14 @@ Buckets (internal ids): plano, ut, allen, sf, family, climb, online. The user ma
 Strength scale: 0 (no connection) to 10 (inseparable). Default connection weight when unspecified: 3 for "connect", 6 for "connect strongly", 8 for "very strong".
 Tag vocabulary includes: highagency, highsignal, interesting, fun, friends, important, helpful, boring. Tags outside this list are fine too.
 
-When the user says something like "make everyone in this cluster interconnected" or "connect all of PKP", use connect_cluster with the bucket id (not the display name). When the user references "this cluster" without naming it, pick the largest cluster from the snapshot or the one most recently mentioned in conversation.
+CLUSTER METHODOLOGY: cluster membership (the colored haze) is the implicit "these people all know each other" signal. You should NOT auto-connect everyone in a cluster — drawing every pair as an edge creates visual chaos. Edges are reserved for *exceptional* ties: best friends, romantic, mentor, beef, etc. Each cluster gets one "rope" from the user ("you") to the cluster centroid; individuals can be marked pinToMe to get their own direct line instead of being folded into the rope.
+
+Rules:
+- "make everyone in this cluster interconnected" / "connect all of PKP" → still call connect_cluster (user explicitly opted in), but warn briefly that the cluster haze already implies it.
+- "undo that interconnect" / "unhairball PKP" → call disconnect_cluster.
+- "tom is one of my closest friends" / "pin sarah" / "give jess a direct line" → call pin_to_me.
+- "unpin tom" → unpin_from_me.
+- When the user references "this cluster" without naming it, pick the largest cluster from the snapshot or the one most recently mentioned.
 
 If the user is ambiguous, prefer log_thought. Keep it snappy. Return a short confirmation after your tool calls.`;
 
@@ -39,7 +49,8 @@ function snapshotToText(snap: Awaited<ReturnType<typeof getGraphSnapshot>>): str
     lines.push(`- ${label} — ${c.people.length} people:`);
     for (const p of c.people) {
       const tagStr = p.tags.length ? ` {${p.tags.join(',')}}` : '';
-      lines.push(`    · ${p.name} (s=${p.strength})${tagStr}`);
+      const pinStr = p.pinned ? ' [PINNED]' : '';
+      lines.push(`    · ${p.name} (s=${p.strength})${tagStr}${pinStr}`);
     }
   }
   return lines.join('\n');
@@ -135,7 +146,7 @@ const tools: Anthropic.Tool[] = [
   {
     name: 'connect_cluster',
     description:
-      'Create pairwise connections between every person in a cluster (bucket). Use for "make everyone in this cluster interconnected" or "connect all of PKP". Pass the bucket id (e.g. "climb"), not the display name.',
+      'Create pairwise connections between every person in a cluster (bucket). Use ONLY when the user explicitly asks to interconnect a whole cluster — by default the cluster haze already implies they know each other, so this is rarely needed. Pass the bucket id, not the display name.',
     input_schema: {
       type: 'object',
       properties: {
@@ -143,6 +154,37 @@ const tools: Anthropic.Tool[] = [
         weight: { type: 'number', description: '0-10 strength for each new edge (default 5)' },
       },
       required: ['bg'],
+    },
+  },
+  {
+    name: 'disconnect_cluster',
+    description:
+      'Remove all explicit edges between people in a cluster. Use when the user wants to undo a previous interconnect or clean up a hairball.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        bg: { type: 'string', description: 'Bucket id' },
+      },
+      required: ['bg'],
+    },
+  },
+  {
+    name: 'pin_to_me',
+    description:
+      'Mark a person as a direct connection to "you" — they get their own line from you instead of being folded into the cluster rope. Use for "tom is one of my closest friends, give him a direct line" or "pin sarah to me".',
+    input_schema: {
+      type: 'object',
+      properties: { name: { type: 'string' } },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'unpin_from_me',
+    description: 'Undo pin_to_me — remove the direct line and fold them back into the cluster rope.',
+    input_schema: {
+      type: 'object',
+      properties: { name: { type: 'string' } },
+      required: ['name'],
     },
   },
 ];
@@ -174,6 +216,12 @@ async function runTool(name: string, input: Record<string, unknown>): Promise<To
       return deletePerson(s('name'));
     case 'connect_cluster':
       return connectCluster(s('bg'), n('weight', 5));
+    case 'disconnect_cluster':
+      return disconnectCluster(s('bg'));
+    case 'pin_to_me':
+      return pinToMe(s('name'));
+    case 'unpin_from_me':
+      return unpinFromMe(s('name'));
     default:
       return { ok: false, message: `unknown tool ${name}` };
   }

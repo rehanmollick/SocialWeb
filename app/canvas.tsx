@@ -10,6 +10,7 @@ export type GraphNode = {
   strength: number;
   tags: string[];
   description?: string;
+  pinToMe?: boolean;
 };
 export type GraphEdge = { source: number; target: number; weight: number };
 export type GraphPayload = {
@@ -1914,17 +1915,49 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       }
       ctx.restore();
 
-      // ===== me edges (you -> every person with strength > 0) =====
-      // matches peer-edge scale so a strength-10 person with no peer links still reads as strong
+      // ===== me-cluster ropes + pinned direct me-edges =====
+      // cluster membership reads as an implicit "you know these people"; only pinned
+      // individuals get their own line. one rope per visible cluster lands at the haze
+      // centroid with thickness scaled by the avg member strength (excluding pinned).
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
+
+      type RopeAgg = { sumS: number; n: number };
+      const ropeAgg: Record<string, RopeAgg> = {};
       for (const n of gNodes) {
-        if (n.s <= 0) continue;
-        const norm = n.s / 10;
-        const pulseMul = n.s >= 7 ? 0.85 + 0.15 * Math.sin(tSec * 1.4 + n.s) : 1;
-        const alpha = (Math.pow(norm, 1.2) * 0.95 + 0.03) * pulseMul;
-        const width = (Math.pow(norm, 1.3) * 2.7 + 0.25) / currentTransform.k;
+        if (n.pinToMe) continue;
+        if (n.bg === 'online') continue;
+        const a = (ropeAgg[n.bg] ||= { sumS: 0, n: 0 });
+        a.sumS += n.s;
+        a.n += 1;
+      }
+      for (const bg of Object.keys(ropeAgg)) {
+        const agg = ropeAgg[bg];
+        if (agg.n < 1) continue;
+        const st = hazeState[bg];
+        if (!st || st.a < 0.05) continue;
+        const avgS = agg.sumS / agg.n;
+        const norm = avgS / 10;
+        const sizeBoost = Math.min(1.4, 0.85 + Math.log10(agg.n + 1) * 0.45);
+        const pulseMul = avgS >= 7 ? 0.88 + 0.12 * Math.sin(tSec * 1.4 + avgS) : 1;
+        const alpha = (Math.pow(norm, 1.1) * 0.55 + 0.08) * pulseMul * Math.min(1, st.a * 1.4);
+        const width = ((Math.pow(norm, 1.2) * 4 + 0.6) * sizeBoost) / currentTransform.k;
         ctx.strokeStyle = `rgba(220,225,255,${alpha})`;
+        ctx.lineWidth = width;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(st.x, st.y);
+        ctx.stroke();
+      }
+
+      // pinned direct lines (and any non-clustered/online pinned)
+      for (const n of gNodes) {
+        if (!n.pinToMe) continue;
+        const norm = Math.max(0.3, n.s / 10);
+        const pulseMul = n.s >= 7 ? 0.85 + 0.15 * Math.sin(tSec * 1.4 + n.s) : 1;
+        const alpha = (Math.pow(norm, 1.2) * 0.95 + 0.05) * pulseMul;
+        const width = (Math.pow(norm, 1.3) * 2.7 + 0.4) / currentTransform.k;
+        ctx.strokeStyle = `rgba(220,235,255,${alpha})`;
         ctx.lineWidth = width;
         ctx.beginPath();
         ctx.moveTo(0, 0);

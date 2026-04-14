@@ -11,6 +11,7 @@ type GraphNode = {
   strength: number;
   tags: string[];
   description: string;
+  pinToMe: boolean;
 };
 
 type GraphEdge = {
@@ -34,6 +35,7 @@ export async function GET() {
     strength: p.strength,
     tags: safeTags(p.tags),
     description: p.description ?? '',
+    pinToMe: !!p.pinToMe,
   }));
 
   const byThought = new Map<number, number[]>();
@@ -54,28 +56,13 @@ export async function GET() {
     }
   }
 
-  const byBg = new Map<string, number[]>();
-  for (const p of allPeople) {
-    if (p.bg === 'online') continue;
-    const arr = byBg.get(p.bg) ?? [];
-    arr.push(p.id);
-    byBg.set(p.bg, arr);
-  }
-  const bgWeights = new Map<string, number>();
-  for (const ids of byBg.values()) {
-    if (ids.length < 2 || ids.length > 12) continue;
-    for (let i = 0; i < ids.length; i++) {
-      for (let j = i + 1; j < ids.length; j++) {
-        bgWeights.set(pairKey(ids[i], ids[j]), 1.2);
-      }
-    }
-  }
-
   const overrideMap = new Map<string, { weight: number | null; deleted: boolean }>();
   for (const o of overrides) {
     overrideMap.set(pairKey(o.aId, o.bId), { weight: o.weight, deleted: o.deleted });
   }
 
+  // edges = explicit overrides + journal-mention co-occurrences only.
+  // bucket co-membership no longer creates edges — the cluster haze IS the implicit signal.
   const edges: GraphEdge[] = [];
   const emitted = new Set<string>();
   for (const [k, w] of weights) {
@@ -89,14 +76,6 @@ export async function GET() {
     if (ov.deleted || emitted.has(k)) continue;
     const [a, b] = k.split('-').map(Number);
     edges.push({ source: a, target: b, weight: ov.weight ?? 1 });
-    emitted.add(k);
-  }
-  for (const [k, w] of bgWeights) {
-    if (emitted.has(k)) continue;
-    const ov = overrideMap.get(k);
-    if (ov?.deleted) continue;
-    const [a, b] = k.split('-').map(Number);
-    edges.push({ source: a, target: b, weight: w });
     emitted.add(k);
   }
 

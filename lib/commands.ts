@@ -229,6 +229,48 @@ export async function deletePerson(name: string): Promise<ToolResult> {
   return { ok: true, message: `deleted ${p.name}` };
 }
 
+export async function pinToMe(name: string): Promise<ToolResult> {
+  const p = await findPerson(name);
+  if (!p) return { ok: false, message: 'person not found' };
+  await db
+    .update(schema.people)
+    .set({ pinToMe: true, updatedAt: Date.now() })
+    .where(eq(schema.people.id, p.id));
+  return { ok: true, message: `${p.name} pinned as a direct connection` };
+}
+
+export async function unpinFromMe(name: string): Promise<ToolResult> {
+  const p = await findPerson(name);
+  if (!p) return { ok: false, message: 'person not found' };
+  await db
+    .update(schema.people)
+    .set({ pinToMe: false, updatedAt: Date.now() })
+    .where(eq(schema.people.id, p.id));
+  return { ok: true, message: `${p.name} unpinned` };
+}
+
+export async function disconnectCluster(bg: string): Promise<ToolResult> {
+  if (!isBg(bg)) return { ok: false, message: `unknown bucket: ${bg}` };
+  const members = await db.query.people.findMany({
+    where: eq(schema.people.bg, bg),
+  });
+  if (members.length < 2) return { ok: false, message: `nothing to disconnect in ${bg}` };
+  let cleared = 0;
+  for (let i = 0; i < members.length; i++) {
+    for (let j = i + 1; j < members.length; j++) {
+      const [a, b] = orderedIds(members[i].id, members[j].id);
+      const existing = await db.query.edgeOverrides.findFirst({
+        where: and(eq(schema.edgeOverrides.aId, a), eq(schema.edgeOverrides.bId, b)),
+      });
+      if (existing) {
+        await db.delete(schema.edgeOverrides).where(eq(schema.edgeOverrides.id, existing.id));
+        cleared++;
+      }
+    }
+  }
+  return { ok: true, message: `cleared ${cleared} edges in ${bg}` };
+}
+
 export async function connectCluster(
   bg: string,
   weight = 5
@@ -258,7 +300,7 @@ export type GraphSnapshot = {
   clusters: Array<{
     bg: string;
     name: string | null;
-    people: Array<{ name: string; strength: number; tags: string[] }>;
+    people: Array<{ name: string; strength: number; tags: string[]; pinned: boolean }>;
   }>;
   totalPeople: number;
 };
@@ -284,6 +326,7 @@ export async function getGraphSnapshot(): Promise<GraphSnapshot> {
           name: p.name,
           strength: p.strength,
           tags: parseTags(p.tags),
+          pinned: !!p.pinToMe,
         })),
     }));
   return { clusters, totalPeople: allPeople.length };
