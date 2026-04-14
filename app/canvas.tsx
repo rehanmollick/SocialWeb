@@ -1204,13 +1204,13 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       }
 
       // check if click is within a visible haze and has no user-set name yet
+      // any visible haze is clickable — empty ones get named, named ones open
+      // for rename/delete. AppPage reads the current name from graph.bucketNames.
       let bestHazeBg: string | null = null;
       let bestHazeD2 = Infinity;
-      const bnames = graphRef.current.bucketNames ?? {};
       for (const bg of bgOrder) {
         const st = hazeState[bg];
         if (!st || st.a < 0.12) continue;
-        if (bnames[bg]) continue; // already named, skip
         const dx = wx - st.x;
         const dy = wy - st.y;
         const d2 = dx * dx + dy * dy;

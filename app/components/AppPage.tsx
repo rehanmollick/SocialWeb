@@ -226,9 +226,17 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
   const submitClusterName = async () => {
     if (!clusterNamePopup) return;
     const { bg, value } = clusterNamePopup;
+    const existing = (graph.bucketNames ?? {})[bg] ?? '';
     setClusterNamePopup(null);
     const trimmed = value.trim();
-    if (!trimmed) return;
+    // no-op: opened then dismissed without ever having a name
+    if (!trimmed && !existing) return;
+    // cleared an existing name → treat as delete
+    if (!trimmed && existing) {
+      await deleteClusterName(bg);
+      return;
+    }
+    if (trimmed === existing) return;
     await fetch(`/api/buckets/${encodeURIComponent(bg)}`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
@@ -237,6 +245,20 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
     await fetchGraph();
   };
 
+  const deleteClusterName = async (bg: string) => {
+    setGraph((g) => {
+      const next = { ...(g.bucketNames ?? {}) };
+      delete next[bg];
+      return { ...g, bucketNames: next };
+    });
+    setClusterNamePopup(null);
+    await fetch(`/api/buckets/${encodeURIComponent(bg)}`, { method: 'DELETE' });
+    await fetchGraph();
+  };
+
+  // fired by the canvas when a named cluster's haze fades out (no members
+  // left). clean up the stored name so it doesn't reappear on a future bucket
+  // reuse with the same bg id.
   const handleHazeFaded = async (bg: string) => {
     if (!(graph.bucketNames ?? {})[bg]) return;
     await fetch(`/api/buckets/${encodeURIComponent(bg)}`, { method: 'DELETE' });
@@ -454,7 +476,8 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
             }
           }}
           onClusterClick={(bg, sx, sy) => {
-            setClusterNamePopup({ bg, x: sx, y: sy, value: '' });
+            const existing = (graph.bucketNames ?? {})[bg] ?? '';
+            setClusterNamePopup({ bg, x: sx, y: sy, value: existing });
           }}
           onHazeFaded={handleHazeFaded}
           onConnect={handleConnect}
@@ -598,6 +621,15 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
               }}
               onBlur={submitClusterName}
             />
+            {(graph.bucketNames ?? {})[clusterNamePopup.bg] && (
+              <button
+                className="cluster-name-delete"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => deleteClusterName(clusterNamePopup.bg)}
+              >
+                delete name
+              </button>
+            )}
           </div>
         )}
 
