@@ -27,17 +27,35 @@ export default function MemoryPanel({ refreshKey, collapsed, onToggle }: Props) 
   const [asking, setAsking] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
   const askRef = useRef<HTMLTextAreaElement>(null);
+  const lastAutoH = useRef(0);
+  const userResized = useRef(false);
 
   const autosize = () => {
+    if (userResized.current) return;
     const el = askRef.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, window.innerHeight * 0.6)}px`;
+    const h = Math.min(el.scrollHeight, window.innerHeight * 0.6);
+    el.style.height = `${h}px`;
+    lastAutoH.current = h;
   };
 
   useEffect(() => {
     autosize();
   }, [q]);
+
+  useEffect(() => {
+    const el = askRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      const h = el.getBoundingClientRect().height;
+      if (Math.abs(h - lastAutoH.current) > 2) {
+        userResized.current = true;
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -189,7 +207,7 @@ export default function MemoryPanel({ refreshKey, collapsed, onToggle }: Props) 
             rows={2}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+              if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 ask();
               }
@@ -206,7 +224,7 @@ export default function MemoryPanel({ refreshKey, collapsed, onToggle }: Props) 
               </span>
             </div>
             <span className="send">
-              <b>⌘↵</b>
+              <b>↵</b> send · <b>⇧↵</b> newline
             </span>
           </div>
         </div>
