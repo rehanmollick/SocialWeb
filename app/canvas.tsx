@@ -326,6 +326,11 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     const distantGiants: Galaxy[] = [];
     const hazeState: Record<string, HazeState> = {};
     const fadedBg: Record<string, boolean> = {};
+    // tracks which buckets have ever been visibly alive. the fade-out cleanup
+    // must only fire AFTER a cluster has truly appeared, otherwise the initial
+    // mount (when every haze starts at alpha 0) would immediately delete
+    // every stored cluster name before the haze has had a chance to fade in.
+    const hasBeenAlive: Record<string, boolean> = {};
     let lastShootSpawn = 0;
 
     const layers = [
@@ -1494,11 +1499,15 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       }
 
       // ===== fire haze-faded callback once per cluster when stored name drops below visible =====
+      // gate on hasBeenAlive so we only call the cleanup once the cluster has
+      // genuinely existed and then disappeared — never on the initial frames
+      // where alpha is still ramping up from 0.
       const bucketNamesForFade = graphRef.current.bucketNames ?? {};
       for (const bg of bgOrder) {
         const st = hazeState[bg];
         if (!st) continue;
-        if (bucketNamesForFade[bg] && st.a < 0.04) {
+        if (st.a > 0.18) hasBeenAlive[bg] = true;
+        if (bucketNamesForFade[bg] && hasBeenAlive[bg] && st.a < 0.04) {
           if (!fadedBg[bg]) {
             fadedBg[bg] = true;
             onHazeFadedRef.current?.(bg);
