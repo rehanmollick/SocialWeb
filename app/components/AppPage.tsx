@@ -36,6 +36,12 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
   const [connectStrength, setConnectStrength] = useState(3);
   const [renamingBg, setRenamingBg] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
+  const [clusterNamePopup, setClusterNamePopup] = useState<{
+    bg: string;
+    x: number;
+    y: number;
+    value: string;
+  } | null>(null);
 
   const fetchGraph = useCallback(async () => {
     const res = await fetch('/api/graph', { cache: 'no-store' });
@@ -182,6 +188,37 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
     await fetchGraph();
   };
 
+  const submitClusterName = async () => {
+    if (!clusterNamePopup) return;
+    const { bg, value } = clusterNamePopup;
+    setClusterNamePopup(null);
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    await fetch(`/api/buckets/${encodeURIComponent(bg)}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: trimmed }),
+    });
+    await fetchGraph();
+  };
+
+  const handleHazeFaded = async (bg: string) => {
+    if (!(graph.bucketNames ?? {})[bg]) return;
+    await fetch(`/api/buckets/${encodeURIComponent(bg)}`, { method: 'DELETE' });
+    await fetchGraph();
+  };
+
+  const handleConnect = async (a: number, b: number) => {
+    if (a === b) return;
+    await fetch('/api/edges', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ a, b, weight: 3 }),
+    });
+    setCmdStatus('connected');
+    await fetchGraph();
+  };
+
   const deleteEdge = async (a: number, b: number) => {
     await fetch('/api/edges', {
       method: 'DELETE',
@@ -267,6 +304,11 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
             setConnectQuery('');
           }}
           onSelectEdge={pickEdge}
+          onClusterClick={(bg, sx, sy) => {
+            setClusterNamePopup({ bg, x: sx, y: sy, value: '' });
+          }}
+          onHazeFaded={handleHazeFaded}
+          onConnect={handleConnect}
           focusId={focusId}
         />
 
@@ -285,6 +327,27 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
             <span>strong</span>
           </div>
         </div>
+
+        {clusterNamePopup && (
+          <div
+            className="cluster-name-popup"
+            style={{ left: clusterNamePopup.x, top: clusterNamePopup.y }}
+          >
+            <input
+              autoFocus
+              placeholder="name this cluster..."
+              value={clusterNamePopup.value}
+              onChange={(e) =>
+                setClusterNamePopup((p) => (p ? { ...p, value: e.target.value } : p))
+              }
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') submitClusterName();
+                if (e.key === 'Escape') setClusterNamePopup(null);
+              }}
+              onBlur={submitClusterName}
+            />
+          </div>
+        )}
 
         {selected && (
           <div className="detail-drawer">
@@ -346,7 +409,9 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
               </div>
             </div>
             <div>
-              <div className="dd-section-label">strength</div>
+              <div className="dd-section-label">
+                strength {selected.strength === 0 && <span className="dd-peer-badge">peer only</span>}
+              </div>
               <div className="dd-strength">
                 <input
                   type="range"
@@ -358,6 +423,12 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
                 />
                 <span className="dd-strength-val">{selected.strength.toFixed(1)}</span>
               </div>
+              <button
+                className="dd-peer-btn"
+                onClick={() => patchStrength(selected.id, selected.strength === 0 ? 5 : 0)}
+              >
+                {selected.strength === 0 ? 'reconnect to me' : 'make peer-only (disconnect from me)'}
+              </button>
             </div>
             <div>
               <div className="dd-section-label">connections</div>

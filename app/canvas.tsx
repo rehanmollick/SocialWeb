@@ -152,6 +152,9 @@ type GraphCanvasProps = {
   graph: GraphPayload;
   onSelect?: (node: GraphNode | null) => void;
   onSelectEdge?: (edge: EdgeSelection | null) => void;
+  onClusterClick?: (bg: string, screenX: number, screenY: number) => void;
+  onHazeFaded?: (bg: string) => void;
+  onConnect?: (aId: number, bId: number) => void;
   focusId?: number | null;
 };
 
@@ -168,15 +171,21 @@ function primaryTagOf(tags: string[]): string {
   return 'friends';
 }
 
-export default function GraphCanvas({ graph, onSelect, onSelectEdge, focusId }: GraphCanvasProps) {
+export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterClick, onHazeFaded, onConnect, focusId }: GraphCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const onSelectRef = useRef(onSelect);
   const onSelectEdgeRef = useRef(onSelectEdge);
+  const onClusterClickRef = useRef(onClusterClick);
+  const onHazeFadedRef = useRef(onHazeFaded);
+  const onConnectRef = useRef(onConnect);
   const runtimeRef = useRef<Runtime | null>(null);
   const graphRef = useRef<GraphPayload>(graph);
   onSelectRef.current = onSelect;
   onSelectEdgeRef.current = onSelectEdge;
+  onClusterClickRef.current = onClusterClick;
+  onHazeFadedRef.current = onHazeFaded;
+  onConnectRef.current = onConnect;
   graphRef.current = graph;
 
   useEffect(() => {
@@ -228,6 +237,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, focusId }: 
     const orbiters: Orbiter[] = [];
     const galaxies: Galaxy[] = [];
     const hazeState: Record<string, HazeState> = {};
+    const fadedBg: Record<string, boolean> = {};
     let lastShootSpawn = 0;
 
     const layers = [
@@ -494,7 +504,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, focusId }: 
       .zoom<HTMLCanvasElement, unknown>()
       .scaleExtent([0.25, 4])
       .filter((ev) => {
-        if (ev.type === 'wheel') return !ev.ctrlKey;
+        if (ev.type === 'wheel') return true;
+        if ((ev as KeyboardEvent).shiftKey) return false;
         if (ev.button && ev.button !== 0) return false;
         const cx = (ev as PointerEvent).clientX ?? (ev as MouseEvent).clientX;
         const cy = (ev as PointerEvent).clientY ?? (ev as MouseEvent).clientY;
@@ -517,6 +528,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, focusId }: 
     const drag = d3
       .drag<HTMLCanvasElement, unknown>()
       .clickDistance(6)
+      .filter((event) => !(event as PointerEvent).shiftKey && !(event as MouseEvent).button)
       .subject((event) => {
         const [mx, my] = d3.pointer(event, canvas);
         const wx = (mx - currentTransform.x) / currentTransform.k;
@@ -570,7 +582,59 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, focusId }: 
       });
     sel.call(drag);
 
+    // ===== shift+drag to connect two dots =====
+    let connectSource: SimNode | null = null;
+    let connectMouseW = { x: 0, y: 0 };
+    let justConnected = false;
+    const screenToWorld = (clientX: number, clientY: number) => {
+      const rect = canvas.getBoundingClientRect();
+      const mx = clientX - rect.left;
+      const my = clientY - rect.top;
+      return {
+        x: (mx - currentTransform.x) / currentTransform.k,
+        y: (my - currentTransform.y) / currentTransform.k,
+      };
+    };
+    const onPointerDown = (ev: PointerEvent) => {
+      if (!ev.shiftKey) return;
+      const hit = hitNodeAt(ev.clientX, ev.clientY);
+      if (!hit) return;
+      connectSource = hit;
+      connectMouseW = screenToWorld(ev.clientX, ev.clientY);
+      try {
+        canvas.setPointerCapture(ev.pointerId);
+      } catch {}
+      ev.stopPropagation();
+      ev.preventDefault();
+    };
+    const onPointerMove = (ev: PointerEvent) => {
+      if (!connectSource) return;
+      connectMouseW = screenToWorld(ev.clientX, ev.clientY);
+      ev.stopPropagation();
+    };
+    const onPointerUp = (ev: PointerEvent) => {
+      if (!connectSource) return;
+      const target = hitNodeAt(ev.clientX, ev.clientY);
+      if (target && target.id !== connectSource.id) {
+        onConnectRef.current?.(connectSource.id, target.id);
+        justConnected = true;
+      }
+      connectSource = null;
+      try {
+        canvas.releasePointerCapture(ev.pointerId);
+      } catch {}
+      ev.stopPropagation();
+    };
+    canvas.addEventListener('pointerdown', onPointerDown, true);
+    canvas.addEventListener('pointermove', onPointerMove, true);
+    canvas.addEventListener('pointerup', onPointerUp, true);
+    canvas.addEventListener('pointercancel', onPointerUp, true);
+
     const onClick = (ev: MouseEvent) => {
+      if (justConnected) {
+        justConnected = false;
+        return;
+      }
       const rect = canvas.getBoundingClientRect();
       const mx = ev.clientX - rect.left;
       const my = ev.clientY - rect.top;
@@ -624,10 +688,34 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, focusId }: 
         const s = bestEdge.source as SimNode;
         const t = bestEdge.target as SimNode;
         onSelectEdgeRef.current?.({ a: s.id, b: t.id, weight: bestEdge.weight });
-      } else {
+        return;
+      }
+
+      // check if click is within a visible haze and has no user-set name yet
+      let bestHazeBg: string | null = null;
+      let bestHazeD2 = Infinity;
+      const bnames = graphRef.current.bucketNames ?? {};
+      for (const bg of bgOrder) {
+        const st = hazeState[bg];
+        if (!st || st.a < 0.12) continue;
+        if (bnames[bg]) continue; // already named, skip
+        const dx = wx - st.x;
+        const dy = wy - st.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < st.r * st.r && d2 < bestHazeD2) {
+          bestHazeD2 = d2;
+          bestHazeBg = bg;
+        }
+      }
+      if (bestHazeBg) {
+        onClusterClickRef.current?.(bestHazeBg, ev.clientX, ev.clientY);
         onSelectRef.current?.(null);
         onSelectEdgeRef.current?.(null);
+        return;
       }
+
+      onSelectRef.current?.(null);
+      onSelectEdgeRef.current?.(null);
     };
     canvas.addEventListener('click', onClick);
 
@@ -795,10 +883,12 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, focusId }: 
         if (!st) {
           st = hazeState[bg] = { x: seed.x, y: seed.y, r: 0, a: 0 };
         }
-        if (live.n > 0) {
-          const spread = Math.sqrt(live.maxD2) + 50;
-          const targetR = Math.max(90, spread * 1.45);
-          const targetA = Math.min(1, 0.45 + live.n * 0.13);
+        if (live.n >= 2) {
+          const spread = Math.sqrt(live.maxD2);
+          // density = tight clusters fire bright, spread ones fade
+          const compactness = live.n / (1 + spread / 70);
+          const targetR = Math.max(90, spread * 1.4 + 60);
+          const targetA = Math.min(0.95, compactness * 0.18);
           const radiusLerp = targetR > st.r ? lerp : shrinkLerp;
           const alphaLerp = targetA > st.a ? lerp : shrinkLerp;
           st.x += (live.cx - st.x) * lerp;
@@ -808,6 +898,21 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, focusId }: 
         } else {
           st.a += (0 - st.a) * 0.08;
           st.r += (40 - st.r) * 0.08;
+        }
+      }
+
+      // ===== fire haze-faded callback once per cluster when stored name drops below visible =====
+      const bucketNamesForFade = graphRef.current.bucketNames ?? {};
+      for (const bg of bgOrder) {
+        const st = hazeState[bg];
+        if (!st) continue;
+        if (bucketNamesForFade[bg] && st.a < 0.04) {
+          if (!fadedBg[bg]) {
+            fadedBg[bg] = true;
+            onHazeFadedRef.current?.(bg);
+          }
+        } else if (st.a > 0.12) {
+          fadedBg[bg] = false;
         }
       }
 
@@ -1065,13 +1170,43 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, focusId }: 
         ctx.stroke();
       }
 
-      // ===== cluster labels =====
+      // ===== in-progress connect line (shift+drag) =====
+      if (connectSource) {
+        const sx = connectSource.x ?? 0;
+        const sy = connectSource.y ?? 0;
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.strokeStyle = 'rgba(180,220,255,0.85)';
+        ctx.lineWidth = 1.8 / currentTransform.k;
+        ctx.setLineDash([6 / currentTransform.k, 4 / currentTransform.k]);
+        ctx.beginPath();
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(connectMouseW.x, connectMouseW.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        const hoverTarget = hitNodeAt(
+          connectMouseW.x * currentTransform.k + currentTransform.x + canvas.getBoundingClientRect().left,
+          connectMouseW.y * currentTransform.k + currentTransform.y + canvas.getBoundingClientRect().top
+        );
+        if (hoverTarget && hoverTarget.id !== connectSource.id) {
+          const tx = hoverTarget.x ?? 0;
+          const ty = hoverTarget.y ?? 0;
+          ctx.strokeStyle = 'rgba(180,255,220,0.9)';
+          ctx.lineWidth = 1.4 / currentTransform.k;
+          ctx.beginPath();
+          ctx.arc(tx, ty, 14, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      // ===== cluster labels (only user-named clusters) =====
       const bucketNames = graphRef.current.bucketNames ?? {};
       for (const bg of bgOrder) {
         const st = hazeState[bg];
         if (!st || st.a < 0.05) continue;
-        const label = bucketNames[bg] || bgLabels[bg] || bg;
-        const subtitle = bgSubtitle[bg] || '';
+        const label = bucketNames[bg];
+        if (!label) continue;
         const count = counts[bg] || 0;
         const mainSize = 13 / currentTransform.k;
         const subSize = 9 / currentTransform.k;
@@ -1085,12 +1220,11 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, focusId }: 
         ctx.fillText(label, st.x + shadowOff, labelY + shadowOff);
         ctx.fillStyle = hexToRgba(bgColors[bg], 0.98);
         ctx.fillText(label, st.x, labelY);
-        const meta = `${subtitle} · ${count}`;
         ctx.font = `${subSize}px 'JetBrains Mono', monospace`;
         ctx.fillStyle = 'rgba(0,0,0,0.8)';
-        ctx.fillText(meta, st.x + shadowOff, labelY + 15 / currentTransform.k + shadowOff);
+        ctx.fillText(`${count}`, st.x + shadowOff, labelY + 15 / currentTransform.k + shadowOff);
         ctx.fillStyle = 'rgba(180,180,180,0.75)';
-        ctx.fillText(meta, st.x, labelY + 15 / currentTransform.k);
+        ctx.fillText(`${count}`, st.x, labelY + 15 / currentTransform.k);
         ctx.globalAlpha = 1;
       }
 
@@ -1105,24 +1239,26 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, focusId }: 
         if (isStar) {
           const pulse = 0.75 + 0.25 * Math.sin(tSec * 2.0 + (n._starPhase || 0));
           const pulseSlow = 0.85 + 0.15 * Math.sin(tSec * 0.7 + (n._starPhase || 0));
+          const traitTagsForTint = tags.filter((t) => t !== 'highagency' && t in tagColors);
+          const traitTint = traitTagsForTint.length > 0 ? tagColors[traitTagsForTint[0]] : '#ffe8b0';
           ctx.save();
           ctx.globalCompositeOperation = 'lighter';
           const wideR = r * 11 * pulseSlow;
           const wide = ctx.createRadialGradient(x, y, 0, x, y, wideR);
-          wide.addColorStop(0, 'rgba(255,255,255,0.18)');
-          wide.addColorStop(0.18, 'rgba(180,230,255,0.13)');
-          wide.addColorStop(0.5, 'rgba(180,230,255,0.04)');
-          wide.addColorStop(1, 'rgba(180,230,255,0)');
+          wide.addColorStop(0, hexToRgba(traitTint, 0.22));
+          wide.addColorStop(0.18, hexToRgba(traitTint, 0.14));
+          wide.addColorStop(0.5, hexToRgba(traitTint, 0.05));
+          wide.addColorStop(1, hexToRgba(traitTint, 0));
           ctx.fillStyle = wide;
           ctx.beginPath();
           ctx.arc(x, y, wideR, 0, Math.PI * 2);
           ctx.fill();
           const midR = r * 5.5 * pulse;
           const mid = ctx.createRadialGradient(x, y, 0, x, y, midR);
-          mid.addColorStop(0, 'rgba(255,255,255,0.95)');
-          mid.addColorStop(0.15, 'rgba(255,250,220,0.55)');
-          mid.addColorStop(0.4, 'rgba(255,230,180,0.18)');
-          mid.addColorStop(1, 'rgba(255,220,180,0)');
+          mid.addColorStop(0, 'rgba(255,255,255,0.9)');
+          mid.addColorStop(0.15, hexToRgba(traitTint, 0.7));
+          mid.addColorStop(0.4, hexToRgba(traitTint, 0.22));
+          mid.addColorStop(1, hexToRgba(traitTint, 0));
           ctx.fillStyle = mid;
           ctx.beginPath();
           ctx.arc(x, y, midR, 0, Math.PI * 2);
@@ -1131,9 +1267,9 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, focusId }: 
           const spikeW = 0.8 / currentTransform.k;
           const spikeGrad = (x1: number, y1: number, x2: number, y2: number) => {
             const g = ctx.createLinearGradient(x1, y1, x2, y2);
-            g.addColorStop(0, 'rgba(255,255,255,0)');
-            g.addColorStop(0.5, 'rgba(255,255,255,0.85)');
-            g.addColorStop(1, 'rgba(255,255,255,0)');
+            g.addColorStop(0, hexToRgba(traitTint, 0));
+            g.addColorStop(0.5, hexToRgba(traitTint, 0.9));
+            g.addColorStop(1, hexToRgba(traitTint, 0));
             return g;
           };
           ctx.lineWidth = spikeW;
@@ -1201,8 +1337,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, focusId }: 
           const core = ctx.createRadialGradient(x, y, 0, x, y, coreR);
           core.addColorStop(0, '#ffffff');
           core.addColorStop(0.4, '#ffffff');
-          core.addColorStop(0.75, 'rgba(255,250,220,0.95)');
-          core.addColorStop(1, 'rgba(255,230,180,0.55)');
+          core.addColorStop(0.75, hexToRgba(traitTint, 0.95));
+          core.addColorStop(1, hexToRgba(traitTint, 0.6));
           ctx.fillStyle = core;
           ctx.beginPath();
           ctx.arc(x, y, coreR, 0, Math.PI * 2);
@@ -1252,6 +1388,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, focusId }: 
         // for regulars: gray, smaller, close to node
         const firstName = n.name.split(' ')[0];
         if (isStar) {
+          const traitForLabel = tags.filter((t) => t !== 'highagency' && t in tagColors);
+          const labelTint = traitForLabel.length > 0 ? tagColors[traitForLabel[0]] : '#fff5d8';
           const fs = 12 / currentTransform.k;
           const ly = y + r * 6.2;
           ctx.font = `600 ${fs}px Inter, sans-serif`;
@@ -1260,7 +1398,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, focusId }: 
           ctx.lineWidth = 3 / currentTransform.k;
           ctx.strokeStyle = 'rgba(0,0,0,0.9)';
           ctx.strokeText(firstName, x, ly);
-          ctx.fillStyle = 'rgba(255,245,220,0.98)';
+          ctx.fillStyle = hexToRgba(labelTint, 0.98);
           ctx.fillText(firstName, x, ly);
         } else if (n.s >= 4) {
           const fs = 10 / currentTransform.k;
@@ -1309,6 +1447,10 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, focusId }: 
       sim.stop();
       ro.disconnect();
       canvas.removeEventListener('click', onClick);
+      canvas.removeEventListener('pointerdown', onPointerDown, true);
+      canvas.removeEventListener('pointermove', onPointerMove, true);
+      canvas.removeEventListener('pointerup', onPointerUp, true);
+      canvas.removeEventListener('pointercancel', onPointerUp, true);
       runtimeRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
