@@ -543,6 +543,27 @@ button {
   color: var(--fg);
   font-weight: 500;
 }
+.canvas-chrome .chrome-actions {
+  display: flex;
+  gap: 6px;
+  pointer-events: auto;
+}
+.canvas-chrome .chrome-btn {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  padding: 6px 10px;
+  background: rgba(10, 10, 10, 0.6);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+.canvas-chrome .chrome-btn:hover {
+  color: var(--fg);
+  border-color: rgba(255, 255, 255, 0.25);
+}
 .canvas-chrome .legend {
   display: flex;
   gap: 12px;

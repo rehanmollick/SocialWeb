@@ -285,6 +285,61 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
           <div className="crumbs">
             graph · <b>{graph.nodes.length}</b> people · <b>{graph.edges.length}</b> edges
           </div>
+          <div className="chrome-actions">
+            <button
+              className="chrome-btn"
+              onClick={async () => {
+                const res = await fetch('/api/snapshot');
+                if (!res.ok) return;
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+                a.download = `socialweb-snapshot-${stamp}.json`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+              }}
+              title="download a JSON snapshot of the whole graph"
+            >
+              export
+            </button>
+            <button
+              className="chrome-btn"
+              onClick={() => {
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.accept = 'application/json,.json';
+                input.onchange = async () => {
+                  const file = input.files?.[0];
+                  if (!file) return;
+                  if (
+                    !confirm(
+                      'this will WIPE the current graph and replace it with the snapshot. continue?',
+                    )
+                  )
+                    return;
+                  const text = await file.text();
+                  const res = await fetch('/api/snapshot', {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: text,
+                  });
+                  if (!res.ok) {
+                    alert('import failed');
+                    return;
+                  }
+                  await fetchGraph();
+                };
+                input.click();
+              }}
+              title="restore a graph from a previously exported JSON snapshot"
+            >
+              import
+            </button>
+          </div>
         </div>
 
         <GraphCanvas
