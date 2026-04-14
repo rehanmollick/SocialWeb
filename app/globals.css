@@ -1297,9 +1297,12 @@ button {
   color: var(--fg);
   font-family: var(--font-sans);
   font-size: 13px;
-  resize: none;
+  resize: vertical;
   outline: none;
   min-height: 40px;
+  max-height: 60vh;
+  line-height: 1.45;
+  overflow-y: auto;
 }
 .ai-input textarea::placeholder {
   color: var(--fg-muted);

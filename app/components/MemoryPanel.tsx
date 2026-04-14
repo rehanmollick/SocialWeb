@@ -26,6 +26,18 @@ export default function MemoryPanel({ refreshKey, collapsed, onToggle }: Props) 
   const [q, setQ] = useState('');
   const [asking, setAsking] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const askRef = useRef<HTMLTextAreaElement>(null);
+
+  const autosize = () => {
+    const el = askRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, window.innerHeight * 0.6)}px`;
+  };
+
+  useEffect(() => {
+    autosize();
+  }, [q]);
 
   useEffect(() => {
     let cancelled = false;
@@ -171,8 +183,10 @@ export default function MemoryPanel({ refreshKey, collapsed, onToggle }: Props) 
       <div className="ai-input">
         <div className="box">
           <textarea
+            ref={askRef}
             placeholder="ask your graph... who do i know in sf that climbs?"
             value={q}
+            rows={2}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
