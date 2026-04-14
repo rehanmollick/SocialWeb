@@ -634,15 +634,17 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         }
         return;
       }
-      // larger: 1 center + concentric polygons of 7, 13, 19...
+      // larger: hollow center, concentric rings only. The cluster centroid
+      // stays empty so the rope from "you" lands in negative space surrounded
+      // by the cluster, not on top of any single person.
       let index = 0;
-      place(unpinned[index++], 0, 0);
-      const ringSizes = [7, 13, 19, 25];
+      const ringSizes = [8, 14, 20, 26];
+      const baseRadius = 44;
       let ring = 0;
       while (index < total) {
         const cap = ringSizes[ring] ?? ringSizes[ringSizes.length - 1];
         const take = Math.min(cap, total - index);
-        const radius = (ring + 1) * 44;
+        const radius = baseRadius + ring * 44;
         const twist = ring % 2 === 0 ? 0 : Math.PI / cap;
         for (let i = 0; i < take; i++) {
           const theta = orient + twist + (i / take) * Math.PI * 2;
