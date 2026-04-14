@@ -93,6 +93,22 @@ function hexToRgba(hex: string, a: number): string {
   return `rgba(${r},${g},${b},${a})`;
 }
 
+function mixHex(a: string, b: string, t: number): string {
+  const ha = a.replace('#', '');
+  const hb = b.replace('#', '');
+  const ar = parseInt(ha.slice(0, 2), 16);
+  const ag = parseInt(ha.slice(2, 4), 16);
+  const ab = parseInt(ha.slice(4, 6), 16);
+  const br = parseInt(hb.slice(0, 2), 16);
+  const bg = parseInt(hb.slice(2, 4), 16);
+  const bb = parseInt(hb.slice(4, 6), 16);
+  const r = Math.round(ar + (br - ar) * t);
+  const g = Math.round(ag + (bg - ag) * t);
+  const bl = Math.round(ab + (bb - ab) * t);
+  const h = (n: number) => n.toString(16).padStart(2, '0');
+  return `#${h(r)}${h(g)}${h(bl)}`;
+}
+
 type Star = {
   x: number;
   y: number;
@@ -669,10 +685,18 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     let dragStartX = 0;
     let dragStartY = 0;
     let dragMoved = false;
+    let dragGroupStart: Array<{ n: SimNode; ox: number; oy: number }> = [];
     const drag = d3
       .drag<HTMLCanvasElement, unknown>()
       .clickDistance(6)
-      .filter((event) => !(event as PointerEvent).shiftKey && !(event as MouseEvent).button)
+      .filter(
+        (event) =>
+          !(event as PointerEvent).shiftKey &&
+          !(event as PointerEvent).altKey &&
+          !(event as PointerEvent).metaKey &&
+          !(event as PointerEvent).ctrlKey &&
+          !(event as MouseEvent).button,
+      )
       .subject((event) => {
         const [mx, my] = d3.pointer(event, canvas);
         const wx = (mx - currentTransform.x) / currentTransform.k;
@@ -698,24 +722,54 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         const n = event.subject as SimNode;
         n.fx = n.x;
         n.fy = n.y;
+        // if this node is part of a multi-selection, pin all selected nodes for group drag
+        dragGroupStart = [];
+        if (selectedIds.size > 1 && selectedIds.has(n.id)) {
+          for (const other of gNodes) {
+            if (!selectedIds.has(other.id)) continue;
+            other.fx = other.x ?? 0;
+            other.fy = other.y ?? 0;
+            dragGroupStart.push({ n: other, ox: other.x ?? 0, oy: other.y ?? 0 });
+          }
+        }
       })
       .on('drag', (event) => {
         const dx = event.x - dragStartX;
         const dy = event.y - dragStartY;
         if (dx * dx + dy * dy > 36) dragMoved = true;
         const n = event.subject as SimNode;
-        n.fx = event.x;
-        n.fy = event.y;
+        if (dragGroupStart.length > 0) {
+          const dxT = event.x - (n.x ?? 0);
+          const dyT = event.y - (n.y ?? 0);
+          for (const g of dragGroupStart) {
+            g.n.fx = (g.n.fx ?? g.ox) + dxT;
+            g.n.fy = (g.n.fy ?? g.oy) + dyT;
+          }
+        } else {
+          n.fx = event.x;
+          n.fy = event.y;
+        }
       })
       .on('end', (event) => {
         if (!event.active) sim.alphaTarget(0);
         const n = event.subject as SimNode;
         if (dragMoved) {
-          n._ax = n.fx ?? undefined;
-          n._ay = n.fy ?? undefined;
-          n._pinned = true;
-          n.fx = null;
-          n.fy = null;
+          if (dragGroupStart.length > 0) {
+            for (const g of dragGroupStart) {
+              g.n._ax = g.n.fx ?? undefined;
+              g.n._ay = g.n.fy ?? undefined;
+              g.n._pinned = true;
+              g.n.fx = null;
+              g.n.fy = null;
+            }
+            onMoveGroupRef.current?.(dragGroupStart.map((g) => g.n.id));
+          } else {
+            n._ax = n.fx ?? undefined;
+            n._ay = n.fy ?? undefined;
+            n._pinned = true;
+            n.fx = null;
+            n.fy = null;
+          }
           sim.alpha(0.15);
         } else {
           n.fx = null;
@@ -723,6 +777,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           onSelectRef.current?.({ id: n.id, name: n.name, bg: n.bg, strength: n.s, tags: n.tags, description: n.description });
           onSelectEdgeRef.current?.(null);
         }
+        dragGroupStart = [];
       });
     sel.call(drag);
 
@@ -1185,35 +1240,40 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         }
       }
 
-      // ===== haze layer (subtle wisps) =====
+      // ===== haze layer (dull mist — source-over so it reads as muted, not luminous) =====
       ctx.save();
-      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalCompositeOperation = 'source-over';
       for (const bg of bgOrder) {
         const st = hazeState[bg];
         if (!st || st.a < 0.01) continue;
         const color = bgColors[bg];
+        // desaturate the cluster color toward a cool gray so the haze stays dull
+        const dull = mixHex(color, '#8090a8', 0.65);
         const radius = st.r * hazePulse;
-        const aa = st.a * 0.22; // subtle but visible
+        const aa = st.a;
 
-        // soft body
+        // soft body — higher alpha, flat muted tone
         const body = ctx.createRadialGradient(st.x, st.y, 0, st.x, st.y, radius);
-        body.addColorStop(0, hexToRgba(color, 0.14 * aa));
-        body.addColorStop(0.45, hexToRgba(color, 0.07 * aa));
-        body.addColorStop(1, hexToRgba(color, 0));
+        body.addColorStop(0, hexToRgba(dull, 0.32 * aa));
+        body.addColorStop(0.35, hexToRgba(dull, 0.22 * aa));
+        body.addColorStop(0.7, hexToRgba(dull, 0.1 * aa));
+        body.addColorStop(1, hexToRgba(dull, 0));
         ctx.fillStyle = body;
         ctx.beginPath();
         ctx.arc(st.x, st.y, radius, 0, Math.PI * 2);
         ctx.fill();
 
-        // two faint drifting wisps
-        for (let i = 0; i < 2; i++) {
-          const theta = (i / 2) * Math.PI * 2 + tSec * 0.1 + bg.length * 0.6;
-          const lx = st.x + Math.cos(theta) * radius * 0.28;
-          const ly = st.y + Math.sin(theta) * radius * 0.28;
-          const lr = radius * 0.45;
+        // three drifting wisps for billowy shape
+        for (let i = 0; i < 3; i++) {
+          const theta = (i / 3) * Math.PI * 2 + tSec * 0.12 + bg.length * 0.6;
+          const wobble = 0.5 + 0.15 * Math.sin(tSec * 0.6 + i * 1.3);
+          const lx = st.x + Math.cos(theta) * radius * 0.35 * wobble;
+          const ly = st.y + Math.sin(theta) * radius * 0.35 * wobble;
+          const lr = radius * 0.55;
           const lobe = ctx.createRadialGradient(lx, ly, 0, lx, ly, lr);
-          lobe.addColorStop(0, hexToRgba(color, 0.06 * aa));
-          lobe.addColorStop(1, hexToRgba(color, 0));
+          lobe.addColorStop(0, hexToRgba(dull, 0.16 * aa));
+          lobe.addColorStop(0.5, hexToRgba(dull, 0.07 * aa));
+          lobe.addColorStop(1, hexToRgba(dull, 0));
           ctx.fillStyle = lobe;
           ctx.beginPath();
           ctx.arc(lx, ly, lr, 0, Math.PI * 2);
@@ -1229,8 +1289,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         const pulse = 0.85 + 0.15 * Math.sin(neb.pulsePhase + tSec * neb.pulseSpeed);
         const r = neb.radius * pulse;
         const g = ctx.createRadialGradient(neb.x, neb.y, 0, neb.x, neb.y, r);
-        g.addColorStop(0, hexToRgba(neb.color, neb.alpha));
-        g.addColorStop(0.35, hexToRgba(neb.color, neb.alpha * 0.45));
+        g.addColorStop(0, hexToRgba(neb.color, neb.alpha * 0.55));
+        g.addColorStop(0.35, hexToRgba(neb.color, neb.alpha * 0.25));
         g.addColorStop(1, hexToRgba(neb.color, 0));
         ctx.fillStyle = g;
         ctx.beginPath();
@@ -1248,8 +1308,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         ctx.rotate(gx.rot + tSec * 0.015);
         // disc glow
         const gg = ctx.createRadialGradient(0, 0, 0, 0, 0, gx.rx);
-        gg.addColorStop(0, hexToRgba(gx.tint, gx.alpha * 2.2));
-        gg.addColorStop(0.5, hexToRgba(gx.tint, gx.alpha * 0.8));
+        gg.addColorStop(0, hexToRgba(gx.tint, gx.alpha * 1.2));
+        gg.addColorStop(0.5, hexToRgba(gx.tint, gx.alpha * 0.4));
         gg.addColorStop(1, hexToRgba(gx.tint, 0));
         ctx.fillStyle = gg;
         ctx.beginPath();
@@ -1267,7 +1327,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
               const jitter = (Math.random() - 0.5) * 6;
               const px = Math.cos(twist) * radius + jitter;
               const py = Math.sin(twist) * radius * (gx.ry / gx.rx) + jitter;
-              const a = gx.alpha * (1 - t) * 3;
+              const a = gx.alpha * (1 - t) * 1.5;
               ctx.fillStyle = hexToRgba(gx.tint, a);
               ctx.beginPath();
               ctx.arc(px, py, 0.9, 0, Math.PI * 2);
@@ -1277,7 +1337,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         }
 
         // bright core
-        ctx.fillStyle = hexToRgba('#ffffff', gx.alpha * 3);
+        ctx.fillStyle = hexToRgba('#ffffff', gx.alpha * 1.6);
         ctx.beginPath();
         ctx.ellipse(0, 0, gx.rx * 0.14, Math.max(gx.ry, gx.rx) * 0.14, 0, 0, Math.PI * 2);
         ctx.fill();
@@ -1295,8 +1355,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
 
         // halo
         const halo = ctx.createRadialGradient(0, 0, 0, 0, 0, mg.size * 1.6);
-        halo.addColorStop(0, hexToRgba(mg.tint, 0.35));
-        halo.addColorStop(0.5, hexToRgba(mg.tint, 0.1));
+        halo.addColorStop(0, hexToRgba(mg.tint, 0.15));
+        halo.addColorStop(0.5, hexToRgba(mg.tint, 0.05));
         halo.addColorStop(1, hexToRgba(mg.tint, 0));
         ctx.fillStyle = halo;
         ctx.beginPath();
@@ -1305,8 +1365,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
 
         if (mg.kind === 'elliptical') {
           const g = ctx.createRadialGradient(0, 0, 0, 0, 0, mg.size);
-          g.addColorStop(0, hexToRgba(mg.tint, 0.9));
-          g.addColorStop(0.4, hexToRgba(mg.tint, 0.4));
+          g.addColorStop(0, hexToRgba(mg.tint, 0.42));
+          g.addColorStop(0.4, hexToRgba(mg.tint, 0.18));
           g.addColorStop(1, hexToRgba(mg.tint, 0));
           ctx.fillStyle = g;
           ctx.beginPath();
@@ -1324,7 +1384,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
               const jitter = (Math.random() - 0.5) * mg.size * 0.08;
               const px = Math.cos(twist) * radius + jitter;
               const py = Math.sin(twist) * radius + jitter;
-              const a = (1 - t) * 0.75;
+              const a = (1 - t) * 0.35;
               ctx.fillStyle = hexToRgba(mg.tint, a);
               ctx.beginPath();
               ctx.arc(px, py, 0.6, 0, Math.PI * 2);
@@ -1333,7 +1393,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           }
           if (mg.kind === 'barred') {
             // central bar
-            ctx.fillStyle = hexToRgba(mg.tint, 0.7);
+            ctx.fillStyle = hexToRgba(mg.tint, 0.32);
             ctx.beginPath();
             ctx.ellipse(0, 0, mg.size * 0.5, mg.size * 0.12, 0, 0, Math.PI * 2);
             ctx.fill();
@@ -1342,7 +1402,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
 
         // bright nucleus
         const core = ctx.createRadialGradient(0, 0, 0, 0, 0, mg.size * 0.2);
-        core.addColorStop(0, 'rgba(255,255,255,0.95)');
+        core.addColorStop(0, 'rgba(255,255,255,0.55)');
         core.addColorStop(1, hexToRgba(mg.tint, 0));
         ctx.fillStyle = core;
         ctx.beginPath();
@@ -1358,7 +1418,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       for (const p of planets) {
         // soft glow halo
         const halo = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.radius * 3);
-        halo.addColorStop(0, hexToRgba(p.tint, 0.28 * p.glow));
+        halo.addColorStop(0, hexToRgba(p.tint, 0.12 * p.glow));
         halo.addColorStop(1, hexToRgba(p.tint, 0));
         ctx.fillStyle = halo;
         ctx.beginPath();
@@ -1374,9 +1434,9 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           p.y,
           p.radius
         );
-        body.addColorStop(0, hexToRgba(p.tint, 0.95));
-        body.addColorStop(0.7, hexToRgba(p.tint, 0.6));
-        body.addColorStop(1, hexToRgba(p.tint, 0.2));
+        body.addColorStop(0, hexToRgba(p.tint, 0.5));
+        body.addColorStop(0.7, hexToRgba(p.tint, 0.32));
+        body.addColorStop(1, hexToRgba(p.tint, 0.1));
         ctx.fillStyle = body;
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
@@ -1386,12 +1446,12 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           ctx.save();
           ctx.translate(p.x, p.y);
           ctx.rotate(p.ringTilt);
-          ctx.strokeStyle = hexToRgba(p.ringTint, 0.55);
-          ctx.lineWidth = 0.8 / currentTransform.k;
+          ctx.strokeStyle = hexToRgba(p.ringTint, 0.28);
+          ctx.lineWidth = 0.7 / currentTransform.k;
           ctx.beginPath();
           ctx.ellipse(0, 0, p.radius * 2.2, p.radius * 0.7, 0, 0, Math.PI * 2);
           ctx.stroke();
-          ctx.strokeStyle = hexToRgba(p.ringTint, 0.3);
+          ctx.strokeStyle = hexToRgba(p.ringTint, 0.15);
           ctx.beginPath();
           ctx.ellipse(0, 0, p.radius * 2.6, p.radius * 0.82, 0, 0, Math.PI * 2);
           ctx.stroke();
@@ -1409,8 +1469,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         for (let ring = 0; ring < 3; ring++) {
           const rr = bh.radius * (1.8 + ring * 0.4);
           const gg = ctx.createRadialGradient(bh.x, bh.y, bh.radius * 0.8, bh.x, bh.y, rr);
-          gg.addColorStop(0, 'rgba(255,180,80,0.55)');
-          gg.addColorStop(0.6, 'rgba(220,120,200,0.25)');
+          gg.addColorStop(0, 'rgba(255,180,80,0.28)');
+          gg.addColorStop(0.6, 'rgba(220,120,200,0.12)');
           gg.addColorStop(1, 'rgba(160,100,220,0)');
           ctx.save();
           ctx.translate(bh.x, bh.y);
@@ -1428,7 +1488,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         ctx.arc(bh.x, bh.y, bh.radius, 0, Math.PI * 2);
         ctx.fill();
         // rim
-        ctx.strokeStyle = 'rgba(255,200,120,0.5)';
+        ctx.strokeStyle = 'rgba(255,200,120,0.25)';
         ctx.lineWidth = 0.8 / currentTransform.k;
         ctx.stroke();
       }
@@ -1776,32 +1836,32 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
             : ['#ffe8b0'];
           ctx.save();
           ctx.globalCompositeOperation = 'lighter';
-          const wideR = r * 11 * pulseSlow;
+          const wideR = r * 6 * pulseSlow;
           // each trait contributes its own tinted halo offset slightly — reads as multicolor bloom
           for (let pi = 0; pi < palette.length; pi++) {
             const tint = palette[pi];
             const ang = (pi / palette.length) * Math.PI * 2 + tSec * 0.25;
-            const off = palette.length > 1 ? r * 1.1 : 0;
+            const off = palette.length > 1 ? r * 0.8 : 0;
             const cx = x + Math.cos(ang) * off;
             const cy = y + Math.sin(ang) * off;
             const wide = ctx.createRadialGradient(cx, cy, 0, cx, cy, wideR);
             const aMul = 1 / Math.sqrt(palette.length);
-            wide.addColorStop(0, hexToRgba(tint, 0.22 * aMul));
-            wide.addColorStop(0.18, hexToRgba(tint, 0.14 * aMul));
-            wide.addColorStop(0.5, hexToRgba(tint, 0.05 * aMul));
+            wide.addColorStop(0, hexToRgba(tint, 0.11 * aMul));
+            wide.addColorStop(0.2, hexToRgba(tint, 0.07 * aMul));
+            wide.addColorStop(0.55, hexToRgba(tint, 0.025 * aMul));
             wide.addColorStop(1, hexToRgba(tint, 0));
             ctx.fillStyle = wide;
             ctx.beginPath();
             ctx.arc(cx, cy, wideR, 0, Math.PI * 2);
             ctx.fill();
           }
-          const midR = r * 5.5 * pulse;
+          const midR = r * 3.2 * pulse;
           // pie-slice mid glow — each trait owns its wedge
           if (palette.length === 1) {
             const mid = ctx.createRadialGradient(x, y, 0, x, y, midR);
-            mid.addColorStop(0, 'rgba(255,255,255,0.9)');
-            mid.addColorStop(0.15, hexToRgba(palette[0], 0.7));
-            mid.addColorStop(0.4, hexToRgba(palette[0], 0.22));
+            mid.addColorStop(0, 'rgba(255,255,255,0.6)');
+            mid.addColorStop(0.2, hexToRgba(palette[0], 0.42));
+            mid.addColorStop(0.5, hexToRgba(palette[0], 0.13));
             mid.addColorStop(1, hexToRgba(palette[0], 0));
             ctx.fillStyle = mid;
             ctx.beginPath();
@@ -1815,9 +1875,9 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
               const a0 = rot + pi * step;
               const a1 = a0 + step;
               const mid = ctx.createRadialGradient(x, y, 0, x, y, midR);
-              mid.addColorStop(0, 'rgba(255,255,255,0.85)');
-              mid.addColorStop(0.15, hexToRgba(tint, 0.75));
-              mid.addColorStop(0.45, hexToRgba(tint, 0.28));
+              mid.addColorStop(0, 'rgba(255,255,255,0.55)');
+              mid.addColorStop(0.2, hexToRgba(tint, 0.45));
+              mid.addColorStop(0.55, hexToRgba(tint, 0.16));
               mid.addColorStop(1, hexToRgba(tint, 0));
               ctx.fillStyle = mid;
               ctx.beginPath();
@@ -1827,15 +1887,15 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
               ctx.fill();
             }
           }
-          const spikeLen = r * 9 * pulse;
-          const spikeW = 0.8 / currentTransform.k;
+          const spikeLen = r * 5.5 * pulse;
+          const spikeW = 0.6 / currentTransform.k;
           // each spike gets a different trait color when multi-tag
           const spikeTint = (i: number) => palette[i % palette.length];
           const spikeGrad = (x1: number, y1: number, x2: number, y2: number, i: number) => {
             const g = ctx.createLinearGradient(x1, y1, x2, y2);
             const tint = spikeTint(i);
             g.addColorStop(0, hexToRgba(tint, 0));
-            g.addColorStop(0.5, hexToRgba(tint, 0.9));
+            g.addColorStop(0.5, hexToRgba(tint, 0.55));
             g.addColorStop(1, hexToRgba(tint, 0));
             return g;
           };
@@ -1868,10 +1928,10 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           ctx.save();
           ctx.globalCompositeOperation = 'lighter';
           const phase = n._starPhase || 0;
-          const ringR1 = r * 3.2;
-          const ringR2 = r * 4.4;
-          const ring1A = 0.22 + 0.08 * Math.sin(tSec * 1.1 + phase);
-          const ring2A = 0.13 + 0.06 * Math.sin(tSec * 0.6 + phase + 1.2);
+          const ringR1 = r * 2.4;
+          const ringR2 = r * 3.2;
+          const ring1A = 0.13 + 0.05 * Math.sin(tSec * 1.1 + phase);
+          const ring2A = 0.08 + 0.04 * Math.sin(tSec * 0.6 + phase + 1.2);
           ctx.strokeStyle = `rgba(255,240,200,${ring1A})`;
           ctx.lineWidth = 0.7 / currentTransform.k;
           ctx.beginPath();
