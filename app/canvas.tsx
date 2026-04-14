@@ -409,15 +409,42 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       }
     }
 
-    const galaxyTints = ['#c9b5ff', '#b5d7ff', '#ffd1b5', '#b5ffea', '#ffb5d7', '#d7ffb5'];
-    for (let i = 0; i < 28; i++) {
-      // all pushed to mid-far range so the center stays clear
-      const r = i < 14 ? 1500 + Math.random() * 700 : 2200 + Math.random() * 1500;
+    // shared placement points across galaxies + giants + minis so they
+    // never bunch up — rejection-sample with a minimum spacing radius.
+    const placedPoints: { x: number; y: number; r: number }[] = [];
+    const placeAway = (rMin: number, rMax: number, spacing: number): { x: number; y: number } => {
+      for (let attempt = 0; attempt < 60; attempt++) {
+        const r = rMin + Math.random() * (rMax - rMin);
+        const ang = Math.random() * Math.PI * 2;
+        const x = Math.cos(ang) * r;
+        const y = Math.sin(ang) * r;
+        let ok = true;
+        for (const p of placedPoints) {
+          const dx = p.x - x;
+          const dy = p.y - y;
+          if (dx * dx + dy * dy < (p.r + spacing) * (p.r + spacing)) {
+            ok = false;
+            break;
+          }
+        }
+        if (ok) {
+          placedPoints.push({ x, y, r: spacing });
+          return { x, y };
+        }
+      }
+      // give up on spacing — still return a point but don't record it
+      const r = rMin + Math.random() * (rMax - rMin);
       const ang = Math.random() * Math.PI * 2;
+      return { x: Math.cos(ang) * r, y: Math.sin(ang) * r };
+    };
+
+    const galaxyTints = ['#c9b5ff', '#b5d7ff', '#ffd1b5', '#b5ffea', '#ffb5d7', '#d7ffb5'];
+    for (let i = 0; i < 14; i++) {
+      const { x, y } = placeAway(1500 + (i < 7 ? 0 : 700), i < 7 ? 2200 : 3700, 700);
       const spiral = Math.random() > 0.3 ? 1 : 0;
       galaxies.push({
-        x: Math.cos(ang) * r,
-        y: Math.sin(ang) * r,
+        x,
+        y,
         rx: 60 + Math.random() * 100,
         ry: spiral ? 60 + Math.random() * 100 : 22 + Math.random() * 32,
         rot: Math.random() * Math.PI,
@@ -429,13 +456,12 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     }
 
     // a handful of HUGE distant galaxies in the deep outer rim
-    for (let i = 0; i < 6; i++) {
-      const r = 2200 + Math.random() * 1800;
-      const ang = Math.random() * Math.PI * 2;
+    for (let i = 0; i < 4; i++) {
+      const { x, y } = placeAway(2400, 4000, 1100);
       const spiral = Math.random() > 0.35 ? 1 : 0;
       distantGiants.push({
-        x: Math.cos(ang) * r,
-        y: Math.sin(ang) * r,
+        x,
+        y,
         rx: 180 + Math.random() * 220,
         ry: spiral ? 180 + Math.random() * 220 : 60 + Math.random() * 90,
         rot: Math.random() * Math.PI,
@@ -449,12 +475,11 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     // small background galaxies — clearly galaxy-shaped
     const miniTints = ['#c9b5ff', '#b5d7ff', '#ffd1b5', '#b5ffea', '#ffb5e6', '#e6d4ff'];
     const miniKinds: MiniGalaxy['kind'][] = ['spiral', 'spiral', 'barred', 'elliptical'];
-    for (let i = 0; i < 55; i++) {
-      const r = 1300 + Math.random() * 2200;
-      const ang = Math.random() * Math.PI * 2;
+    for (let i = 0; i < 22; i++) {
+      const { x, y } = placeAway(1400, 3500, 360);
       miniGalaxies.push({
-        x: Math.cos(ang) * r,
-        y: Math.sin(ang) * r,
+        x,
+        y,
         size: 8 + Math.random() * 22,
         rot: Math.random() * Math.PI * 2,
         tint: miniTints[i % miniTints.length],
