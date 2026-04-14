@@ -29,6 +29,7 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
   const [rightCollapsed, setRightCollapsed] = useState(false);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const [cmdStatus, setCmdStatus] = useState('');
   const [thoughtsRefreshKey, setThoughtsRefreshKey] = useState(0);
   const [connecting, setConnecting] = useState(false);
   const [connectQuery, setConnectQuery] = useState('');
@@ -62,13 +63,16 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
     const body = input.trim();
     if (!body || busy) return;
     setBusy(true);
+    setCmdStatus('');
     try {
-      await fetch('/api/thought', {
+      const res = await fetch('/api/command', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ body }),
       });
+      const data = (await res.json().catch(() => ({}))) as { summary?: string };
       setInput('');
+      setCmdStatus(data.summary ?? '');
       await fetchGraph();
       setThoughtsRefreshKey((k) => k + 1);
     } finally {
@@ -532,7 +536,7 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
                   submit();
                 }
               }}
-              placeholder="drop a thought... who did you see? what did you talk about?"
+              placeholder="drop a thought or give a command... 'connect sarah and jess strongly'"
               disabled={busy}
             />
           </div>
@@ -543,7 +547,9 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
             <span>
               <b>esc</b> clear
             </span>
-            <span className="meta">{busy ? 'extracting...' : 'claude haiku extracts people'}</span>
+            <span className="meta">
+              {busy ? 'thinking...' : cmdStatus || 'claude haiku · journal or give commands'}
+            </span>
           </div>
         </div>
       </div>
