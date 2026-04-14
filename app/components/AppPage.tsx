@@ -34,8 +34,6 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
   const [connecting, setConnecting] = useState(false);
   const [connectQuery, setConnectQuery] = useState('');
   const [connectStrength, setConnectStrength] = useState(3);
-  const [renamingBg, setRenamingBg] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState('');
   const [clusterNamePopup, setClusterNamePopup] = useState<{
     bg: string;
     x: number;
@@ -185,19 +183,6 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
     });
   };
 
-  const renameBucket = async (bg: string, name: string) => {
-    const trimmed = name.trim();
-    setRenamingBg(null);
-    setRenameValue('');
-    if (!trimmed) return;
-    await fetch(`/api/buckets/${encodeURIComponent(bg)}`, {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: trimmed }),
-    });
-    await fetchGraph();
-  };
-
   const submitClusterName = async () => {
     if (!clusterNamePopup) return;
     const { bg, value } = clusterNamePopup;
@@ -275,11 +260,6 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
     await fetchGraph();
   };
 
-  const bucketCount = graph.nodes.reduce<Record<string, number>>((acc, n) => {
-    acc[n.bg] = (acc[n.bg] ?? 0) + 1;
-    return acc;
-  }, {});
-  const topBuckets = Object.entries(bucketCount).sort((a, b) => b[1] - a[1]);
   const customNames = graph.bucketNames ?? {};
   const labelFor = (bg: string) => customNames[bg] ?? bgLabels[bg] ?? bg;
 
@@ -304,40 +284,6 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
         <div className="canvas-chrome">
           <div className="crumbs">
             graph · <b>{graph.nodes.length}</b> people · <b>{graph.edges.length}</b> edges
-          </div>
-          <div className="legend">
-            {topBuckets.map(([bg, n]) =>
-              renamingBg === bg ? (
-                <input
-                  key={bg}
-                  className="legend-rename"
-                  autoFocus
-                  value={renameValue}
-                  onChange={(e) => setRenameValue(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') renameBucket(bg, renameValue);
-                    if (e.key === 'Escape') {
-                      setRenamingBg(null);
-                      setRenameValue('');
-                    }
-                  }}
-                  onBlur={() => renameBucket(bg, renameValue)}
-                />
-              ) : (
-                <span
-                  key={bg}
-                  className="legend-chip"
-                  title="click to rename"
-                  onClick={() => {
-                    setRenamingBg(bg);
-                    setRenameValue(labelFor(bg));
-                  }}
-                >
-                  <i style={{ background: bgColors[bg] ?? '#8fc08f' }} />
-                  {labelFor(bg)} · {n}
-                </span>
-              )
-            )}
           </div>
         </div>
 

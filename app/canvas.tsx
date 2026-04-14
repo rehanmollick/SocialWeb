@@ -1076,7 +1076,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         }
       }
 
-      // ===== haze layer =====
+      // ===== haze layer (multi-pass for thick, billowy feel) =====
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
       for (const bg of bgOrder) {
@@ -1084,13 +1084,53 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         if (!st || st.a < 0.01) continue;
         const color = bgColors[bg];
         const radius = st.r * hazePulse;
-        const grad = ctx.createRadialGradient(st.x, st.y, 0, st.x, st.y, radius);
-        grad.addColorStop(0, hexToRgba(color, 0.3 * st.a));
-        grad.addColorStop(0.45, hexToRgba(color, 0.09 * st.a));
-        grad.addColorStop(1, hexToRgba(color, 0));
-        ctx.fillStyle = grad;
+
+        // soft outer bloom (huge, diffuse)
+        const bloom = ctx.createRadialGradient(st.x, st.y, 0, st.x, st.y, radius * 1.55);
+        bloom.addColorStop(0, hexToRgba(color, 0.22 * st.a));
+        bloom.addColorStop(0.4, hexToRgba(color, 0.12 * st.a));
+        bloom.addColorStop(1, hexToRgba(color, 0));
+        ctx.fillStyle = bloom;
+        ctx.beginPath();
+        ctx.arc(st.x, st.y, radius * 1.55, 0, Math.PI * 2);
+        ctx.fill();
+
+        // thick body
+        const body = ctx.createRadialGradient(st.x, st.y, 0, st.x, st.y, radius);
+        body.addColorStop(0, hexToRgba(color, 0.55 * st.a));
+        body.addColorStop(0.35, hexToRgba(color, 0.28 * st.a));
+        body.addColorStop(0.7, hexToRgba(color, 0.1 * st.a));
+        body.addColorStop(1, hexToRgba(color, 0));
+        ctx.fillStyle = body;
         ctx.beginPath();
         ctx.arc(st.x, st.y, radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // wispy tendrils: 5 offset lobes drifting with time for a billowy shape
+        const lobes = 5;
+        for (let i = 0; i < lobes; i++) {
+          const theta = (i / lobes) * Math.PI * 2 + tSec * 0.15 + (bg.length * 0.6);
+          const wobble = 0.55 + 0.15 * Math.sin(tSec * 0.7 + i * 1.3);
+          const lx = st.x + Math.cos(theta) * radius * 0.4 * wobble;
+          const ly = st.y + Math.sin(theta) * radius * 0.4 * wobble;
+          const lr = radius * (0.55 + 0.12 * Math.sin(tSec * 0.5 + i));
+          const lobe = ctx.createRadialGradient(lx, ly, 0, lx, ly, lr);
+          lobe.addColorStop(0, hexToRgba(color, 0.18 * st.a));
+          lobe.addColorStop(0.5, hexToRgba(color, 0.07 * st.a));
+          lobe.addColorStop(1, hexToRgba(color, 0));
+          ctx.fillStyle = lobe;
+          ctx.beginPath();
+          ctx.arc(lx, ly, lr, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // bright core
+        const core = ctx.createRadialGradient(st.x, st.y, 0, st.x, st.y, radius * 0.35);
+        core.addColorStop(0, hexToRgba(color, 0.38 * st.a));
+        core.addColorStop(1, hexToRgba(color, 0));
+        ctx.fillStyle = core;
+        ctx.beginPath();
+        ctx.arc(st.x, st.y, radius * 0.35, 0, Math.PI * 2);
         ctx.fill();
       }
       ctx.restore();
