@@ -2198,170 +2198,10 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         const x = n.x ?? 0;
         const y = n.y ?? 0;
 
-        if (isStar) {
-          const pulse = 0.75 + 0.25 * Math.sin(tSec * 2.0 + (n._starPhase || 0));
-          const pulseSlow = 0.85 + 0.15 * Math.sin(tSec * 0.7 + (n._starPhase || 0));
-          const traitTagsForTint = tags.filter((t) => t !== 'highagency' && t in tagColors);
-          const palette = traitTagsForTint.length > 0
-            ? traitTagsForTint.map((t) => tagColors[t])
-            : ['#ffe8b0'];
-          ctx.save();
-          ctx.globalCompositeOperation = 'lighter';
-          const wideR = r * 6 * pulseSlow;
-          // each trait contributes its own tinted halo offset slightly — reads as multicolor bloom
-          for (let pi = 0; pi < palette.length; pi++) {
-            const tint = palette[pi];
-            const ang = (pi / palette.length) * Math.PI * 2 + tSec * 0.25;
-            const off = palette.length > 1 ? r * 0.8 : 0;
-            const cx = x + Math.cos(ang) * off;
-            const cy = y + Math.sin(ang) * off;
-            const wide = ctx.createRadialGradient(cx, cy, 0, cx, cy, wideR);
-            const aMul = 1 / Math.sqrt(palette.length);
-            wide.addColorStop(0, hexToRgba(tint, 0.11 * aMul));
-            wide.addColorStop(0.2, hexToRgba(tint, 0.07 * aMul));
-            wide.addColorStop(0.55, hexToRgba(tint, 0.025 * aMul));
-            wide.addColorStop(1, hexToRgba(tint, 0));
-            ctx.fillStyle = wide;
-            ctx.beginPath();
-            ctx.arc(cx, cy, wideR, 0, Math.PI * 2);
-            ctx.fill();
-          }
-          const midR = r * 3.2 * pulse;
-          // pie-slice mid glow — each trait owns its wedge
-          if (palette.length === 1) {
-            const mid = ctx.createRadialGradient(x, y, 0, x, y, midR);
-            mid.addColorStop(0, 'rgba(255,255,255,0.6)');
-            mid.addColorStop(0.2, hexToRgba(palette[0], 0.42));
-            mid.addColorStop(0.5, hexToRgba(palette[0], 0.13));
-            mid.addColorStop(1, hexToRgba(palette[0], 0));
-            ctx.fillStyle = mid;
-            ctx.beginPath();
-            ctx.arc(x, y, midR, 0, Math.PI * 2);
-            ctx.fill();
-          } else {
-            const step = (Math.PI * 2) / palette.length;
-            const rot = tSec * 0.18 + (n._starPhase || 0);
-            for (let pi = 0; pi < palette.length; pi++) {
-              const tint = palette[pi];
-              const a0 = rot + pi * step;
-              const a1 = a0 + step;
-              const mid = ctx.createRadialGradient(x, y, 0, x, y, midR);
-              mid.addColorStop(0, 'rgba(255,255,255,0.55)');
-              mid.addColorStop(0.2, hexToRgba(tint, 0.45));
-              mid.addColorStop(0.55, hexToRgba(tint, 0.16));
-              mid.addColorStop(1, hexToRgba(tint, 0));
-              ctx.fillStyle = mid;
-              ctx.beginPath();
-              ctx.moveTo(x, y);
-              ctx.arc(x, y, midR, a0, a1);
-              ctx.closePath();
-              ctx.fill();
-            }
-          }
-          const spikeLen = r * 5.5 * pulse;
-          const spikeW = 0.6 / currentTransform.k;
-          // each spike gets a different trait color when multi-tag
-          const spikeTint = (i: number) => palette[i % palette.length];
-          const spikeGrad = (x1: number, y1: number, x2: number, y2: number, i: number) => {
-            const g = ctx.createLinearGradient(x1, y1, x2, y2);
-            const tint = spikeTint(i);
-            g.addColorStop(0, hexToRgba(tint, 0));
-            g.addColorStop(0.5, hexToRgba(tint, 0.55));
-            g.addColorStop(1, hexToRgba(tint, 0));
-            return g;
-          };
-          ctx.lineWidth = spikeW;
-          ctx.strokeStyle = spikeGrad(x - spikeLen, y, x + spikeLen, y, 0);
-          ctx.beginPath();
-          ctx.moveTo(x - spikeLen, y);
-          ctx.lineTo(x + spikeLen, y);
-          ctx.stroke();
-          ctx.strokeStyle = spikeGrad(x, y - spikeLen, x, y + spikeLen, 1);
-          ctx.beginPath();
-          ctx.moveTo(x, y - spikeLen);
-          ctx.lineTo(x, y + spikeLen);
-          ctx.stroke();
-          const diagLen = spikeLen * 0.6;
-          const dOff = diagLen / Math.sqrt(2);
-          ctx.lineWidth = spikeW * 0.7;
-          ctx.strokeStyle = spikeGrad(x - dOff, y - dOff, x + dOff, y + dOff, 2);
-          ctx.beginPath();
-          ctx.moveTo(x - dOff, y - dOff);
-          ctx.lineTo(x + dOff, y + dOff);
-          ctx.stroke();
-          ctx.strokeStyle = spikeGrad(x - dOff, y + dOff, x + dOff, y - dOff, 3);
-          ctx.beginPath();
-          ctx.moveTo(x - dOff, y + dOff);
-          ctx.lineTo(x + dOff, y - dOff);
-          ctx.stroke();
-          ctx.restore();
-          // ===== orbital rings =====
-          ctx.save();
-          ctx.globalCompositeOperation = 'lighter';
-          const phase = n._starPhase || 0;
-          const ringR1 = r * 2.4;
-          const ringR2 = r * 3.2;
-          const ring1A = 0.13 + 0.05 * Math.sin(tSec * 1.1 + phase);
-          const ring2A = 0.08 + 0.04 * Math.sin(tSec * 0.6 + phase + 1.2);
-          ctx.strokeStyle = `rgba(255,240,200,${ring1A})`;
-          ctx.lineWidth = 0.7 / currentTransform.k;
-          ctx.beginPath();
-          ctx.ellipse(x, y, ringR1, ringR1 * 0.36, phase * 0.3, 0, Math.PI * 2);
-          ctx.stroke();
-          ctx.strokeStyle = `rgba(200,220,255,${ring2A})`;
-          ctx.lineWidth = 0.55 / currentTransform.k;
-          ctx.beginPath();
-          ctx.ellipse(x, y, ringR2, ringR2 * 0.3, -phase * 0.25 + 0.8, 0, Math.PI * 2);
-          ctx.stroke();
-          // orbiting satellite dots on the first ring
-          const sat1Ang = tSec * 0.9 + phase;
-          const sat2Ang = tSec * 0.9 + phase + Math.PI;
-          const satPos = (ang: number) => {
-            const cos = Math.cos(phase * 0.3);
-            const sin = Math.sin(phase * 0.3);
-            const lx = Math.cos(ang) * ringR1;
-            const ly = Math.sin(ang) * ringR1 * 0.36;
-            return { x: x + lx * cos - ly * sin, y: y + lx * sin + ly * cos };
-          };
-          const sats = [satPos(sat1Ang), satPos(sat2Ang)];
-          ctx.fillStyle = 'rgba(255,245,220,0.75)';
-          for (const s of sats) {
-            ctx.beginPath();
-            ctx.arc(s.x, s.y, 0.9 / currentTransform.k, 0, Math.PI * 2);
-            ctx.fill();
-          }
-          ctx.restore();
-          const coreR = r * 1.1;
-          const coreTint = palette[0];
-          const core = ctx.createRadialGradient(x, y, 0, x, y, coreR);
-          core.addColorStop(0, '#ffffff');
-          core.addColorStop(0.4, '#ffffff');
-          core.addColorStop(0.75, hexToRgba(coreTint, 0.95));
-          core.addColorStop(1, hexToRgba(coreTint, 0.6));
-          ctx.fillStyle = core;
-          ctx.beginPath();
-          ctx.arc(x, y, coreR, 0, Math.PI * 2);
-          ctx.fill();
-          // trait ring: shows character trait underneath the agency halo
-          const traitTags = tags.filter((t) => t !== 'highagency' && t in tagColors);
-          if (traitTags.length > 0) {
-            ctx.save();
-            ctx.globalCompositeOperation = 'lighter';
-            ctx.strokeStyle = hexToRgba(tagColors[traitTags[0]], 0.95);
-            ctx.lineWidth = 1.5 / currentTransform.k;
-            ctx.beginPath();
-            ctx.arc(x, y, r * 1.55, 0, Math.PI * 2);
-            ctx.stroke();
-            if (traitTags.length > 1) {
-              ctx.strokeStyle = hexToRgba(tagColors[traitTags[1]], 0.55);
-              ctx.lineWidth = 0.8 / currentTransform.k;
-              ctx.beginPath();
-              ctx.arc(x, y, r * 1.95, 0, Math.PI * 2);
-              ctx.stroke();
-            }
-            ctx.restore();
-          }
-        } else {
+        // base dot — tag colors as-is (single fill or pie for multi-tag).
+        // high-agency no longer transforms the dot; it layers a bright overlay
+        // and a faint flair ring on top so the underlying color still reads.
+        {
           const knownTags = tags.filter((t) => t in tagColors);
           const palette = knownTags.length > 0 ? knownTags : [n.primary || 'friends'];
           if (palette.length === 1) {
@@ -2382,36 +2222,57 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           }
         }
 
-        // ===== name label =====
-        // names are load-bearing — readable at a glance trumps subtle. bold,
-        // bright, wide dark stroke so they pop on any background.
-        const firstName = n.name.split(' ')[0];
         if (isStar) {
-          const traitForLabel = tags.filter((t) => t !== 'highagency' && t in tagColors);
-          const labelTint = traitForLabel.length > 0 ? tagColors[traitForLabel[0]] : '#fff5d8';
-          const fs = 15 / currentTransform.k;
-          const ly = y + r * 6.2;
-          ctx.font = `700 ${fs}px Inter, sans-serif`;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.lineWidth = 4 / currentTransform.k;
-          ctx.strokeStyle = 'rgba(0,0,0,0.95)';
-          ctx.strokeText(firstName, x, ly);
-          ctx.fillStyle = hexToRgba(labelTint, 1);
-          ctx.fillText(firstName, x, ly);
-        } else {
-          const fs = 13 / currentTransform.k;
-          const ly = y - r - 7 / currentTransform.k;
-          ctx.font = `600 ${fs}px Inter, sans-serif`;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.lineWidth = 3.5 / currentTransform.k;
-          ctx.strokeStyle = 'rgba(0,0,0,0.92)';
-          ctx.strokeText(firstName, x, ly);
-          const alpha = Math.min(1, 0.82 + n.s * 0.018);
-          ctx.fillStyle = `rgba(240,242,248,${alpha})`;
-          ctx.fillText(firstName, x, ly);
+          // bright translucent overlay — keeps the base color visible underneath
+          // but brightens it, plus a gentle outer halo ring as flair. pulses
+          // softly so it reads as "energetic" without screaming.
+          const phase = n._starPhase || 0;
+          const pulse = 0.88 + 0.12 * Math.sin(tSec * 1.6 + phase);
+          ctx.save();
+          ctx.globalCompositeOperation = 'lighter';
+          const overlay = ctx.createRadialGradient(x, y, 0, x, y, r);
+          overlay.addColorStop(0, `rgba(255,255,255,${0.55 * pulse})`);
+          overlay.addColorStop(0.6, `rgba(255,245,215,${0.22 * pulse})`);
+          overlay.addColorStop(1, 'rgba(255,240,200,0)');
+          ctx.fillStyle = overlay;
+          ctx.beginPath();
+          ctx.arc(x, y, r, 0, Math.PI * 2);
+          ctx.fill();
+          // thin bright ring hugging the dot
+          ctx.strokeStyle = `rgba(255,245,220,${0.75 * pulse})`;
+          ctx.lineWidth = 1.1 / currentTransform.k;
+          ctx.beginPath();
+          ctx.arc(x, y, r + 0.8 / currentTransform.k, 0, Math.PI * 2);
+          ctx.stroke();
+          // soft outer flair — wide falloff, low alpha
+          const flairR = r * 2.2 * pulse;
+          const flair = ctx.createRadialGradient(x, y, r * 0.9, x, y, flairR);
+          flair.addColorStop(0, 'rgba(255,240,200,0.18)');
+          flair.addColorStop(0.5, 'rgba(255,235,190,0.06)');
+          flair.addColorStop(1, 'rgba(255,235,190,0)');
+          ctx.fillStyle = flair;
+          ctx.beginPath();
+          ctx.arc(x, y, flairR, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
         }
+
+        // ===== name label =====
+        // always above the dot regardless of high-agency — position shouldn't
+        // shift when a trait is toggled. bold + stroked for readability on
+        // any background.
+        const firstName = n.name.split(' ')[0];
+        const fs = 13 / currentTransform.k;
+        const ly = y - r - 7 / currentTransform.k;
+        ctx.font = `600 ${fs}px Inter, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.lineWidth = 3.5 / currentTransform.k;
+        ctx.strokeStyle = 'rgba(0,0,0,0.92)';
+        ctx.strokeText(firstName, x, ly);
+        const alpha = Math.min(1, 0.82 + n.s * 0.018);
+        ctx.fillStyle = `rgba(240,242,248,${alpha})`;
+        ctx.fillText(firstName, x, ly);
       }
 
       // ===== "you" node =====
