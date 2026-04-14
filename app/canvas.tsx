@@ -45,24 +45,9 @@ const tagColors: Record<string, string> = {
   boring: '#4a4a4a',
 };
 
-const bgLabels: Record<string, string> = {
-  plano: 'plano east',
-  ut: 'ut austin',
-  allen: 'allen',
-  sf: 'sf / work',
-  family: 'family',
-  climb: 'climbing gym',
-  online: 'online',
-};
-const bgSubtitle: Record<string, string> = {
-  plano: 'high school',
-  ut: 'college',
-  allen: 'grew up here',
-  sf: 'current city',
-  family: 'blood',
-  climb: 'hobby',
-  online: 'internet',
-};
+// preset bucket labels intentionally empty — clusters are unnamed until the user names them.
+const bgLabels: Record<string, string> = {};
+const bgSubtitle: Record<string, string> = {};
 const bgColors: Record<string, string> = {
   plano: '#7a9cb8',
   ut: '#c89060',

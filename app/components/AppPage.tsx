@@ -3,8 +3,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import GraphCanvas, {
   tagColors,
-  bgLabels,
-  bgSubtitle,
   bgColors,
   type GraphNode,
   type GraphPayload,
@@ -261,7 +259,8 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
   };
 
   const customNames = graph.bucketNames ?? {};
-  const labelFor = (bg: string) => customNames[bg] ?? bgLabels[bg] ?? bg;
+  // only custom names — presets intentionally empty so clusters stay unnamed until the user names them.
+  const labelFor = (bg: string) => customNames[bg] ?? '';
 
   const cls = ['app'];
   if (leftCollapsed) cls.push('left-collapsed');
@@ -278,6 +277,7 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
         onSelect={pickPerson}
         collapsed={leftCollapsed}
         onToggle={() => setLeftCollapsed((v) => !v)}
+        bucketNames={customNames}
       />
 
       <div className="canvas">
@@ -344,7 +344,10 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
             style={{ left: createPopup.x, top: createPopup.y }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="cp-head">new person · {labelFor(createPopup.bg)}</div>
+            <div className="cp-head">
+              new person
+              {labelFor(createPopup.bg) && ` · ${labelFor(createPopup.bg)}`}
+            </div>
             <input
               autoFocus
               placeholder="name"
@@ -380,7 +383,7 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
                   }}
                 >
                   <i style={{ background: bgColors[bg] ?? '#8fc08f' }} />
-                  {labelFor(bg)}
+                  {labelFor(bg) || <span className="dd-tag-unnamed">cluster</span>}
                 </span>
               ))}
             </div>
@@ -448,9 +451,9 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
             <div className="dd-head">
               <div>
                 <div className="dd-name">{selected.name}</div>
-                <div className="dd-sub">
-                  {labelFor(selected.bg)} · {bgSubtitle[selected.bg] ?? ''}
-                </div>
+                {labelFor(selected.bg) && (
+                  <div className="dd-sub">{labelFor(selected.bg)}</div>
+                )}
               </div>
               <button className="dd-close" onClick={() => setSelected(null)}>
                 ×
@@ -495,10 +498,11 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
               </div>
             </div>
             <div>
-              <div className="dd-section-label">background</div>
+              <div className="dd-section-label">cluster</div>
               <div className="dd-tags">
                 {BG_KEYS.map((bg) => {
                   const active = selected.bg === bg;
+                  const name = labelFor(bg);
                   return (
                     <span
                       key={bg}
@@ -511,7 +515,7 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
                       }}
                     >
                       <i style={{ background: bgColors[bg] ?? '#8fc08f' }} />
-                      {labelFor(bg)}
+                      {name || <span className="dd-tag-unnamed">unnamed</span>}
                     </span>
                   );
                 })}

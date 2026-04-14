@@ -777,6 +777,10 @@ button {
   border-radius: 50%;
   display: inline-block;
 }
+.dd-tag-unnamed {
+  font-style: italic;
+  opacity: 0.5;
+}
 .detail-drawer .dd-strength {
   display: flex;
   align-items: center;

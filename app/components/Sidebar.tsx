@@ -2,7 +2,7 @@
 
 import { useState, useMemo } from 'react';
 import type { GraphNode } from '../canvas';
-import { tagColors, bgLabels } from '../canvas';
+import { tagColors } from '../canvas';
 
 type Props = {
   nodes: GraphNode[];
@@ -10,9 +10,10 @@ type Props = {
   onSelect: (n: GraphNode) => void;
   collapsed: boolean;
   onToggle: () => void;
+  bucketNames?: Record<string, string>;
 };
 
-export default function Sidebar({ nodes, selectedId, onSelect, collapsed, onToggle }: Props) {
+export default function Sidebar({ nodes, selectedId, onSelect, collapsed, onToggle, bucketNames = {} }: Props) {
   const [q, setQ] = useState('');
 
   const filtered = useMemo(() => {
@@ -43,7 +44,7 @@ export default function Sidebar({ nodes, selectedId, onSelect, collapsed, onTogg
               key={n.id}
               className={`person ${selectedId === n.id ? 'active' : ''}`}
               onClick={() => onSelect(n)}
-              title={bgLabels[n.bg] ?? n.bg}
+              title={bucketNames[n.bg] ?? ''}
             >
               <span className="tagdot" style={{ background: tagColors[primary] ?? '#8fc08f' }} />
               <span className="name">{n.name}</span>
