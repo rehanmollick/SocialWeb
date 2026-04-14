@@ -1151,7 +1151,8 @@ button {
   color: var(--fg-dim);
   flex-shrink: 0;
 }
-.cmdbar input {
+.cmdbar input,
+.cmdbar textarea {
   flex: 1;
   background: transparent;
   border: none;
@@ -1161,7 +1162,20 @@ button {
   outline: none;
   letter-spacing: -0.005em;
 }
-.cmdbar input::placeholder {
+.cmdbar textarea {
+  resize: vertical;
+  min-height: 22px;
+  max-height: 60vh;
+  line-height: 1.45;
+  padding: 0;
+  overflow-y: auto;
+  font-family: var(--font-sans);
+}
+.cmdbar .row {
+  align-items: flex-start;
+}
+.cmdbar input::placeholder,
+.cmdbar textarea::placeholder {
   color: var(--fg-muted);
 }
 .cmdbar .hints {

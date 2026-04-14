@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import GraphCanvas, {
   tagColors,
   bgColors,
@@ -26,6 +26,9 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
   const [input, setInput] = useState('');
+  const cmdInputRef = useRef<HTMLTextAreaElement>(null);
+  const cmdLastAutoH = useRef(0);
+  const cmdUserResized = useRef(false);
   const [busy, setBusy] = useState(false);
   const [cmdStatus, setCmdStatus] = useState('');
   const [thoughtsRefreshKey, setThoughtsRefreshKey] = useState(0);
@@ -58,6 +61,29 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
   useEffect(() => {
     fetchGraph();
   }, [fetchGraph]);
+
+  useEffect(() => {
+    if (cmdUserResized.current) return;
+    const el = cmdInputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const h = Math.min(el.scrollHeight, window.innerHeight * 0.6);
+    el.style.height = `${h}px`;
+    cmdLastAutoH.current = h;
+  }, [input]);
+
+  useEffect(() => {
+    const el = cmdInputRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      const h = el.getBoundingClientRect().height;
+      if (Math.abs(h - cmdLastAutoH.current) > 2) {
+        cmdUserResized.current = true;
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -766,11 +792,13 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
         <div className="cmdbar">
           <div className="row">
             <span className="glyph">+</span>
-            <input
+            <textarea
+              ref={cmdInputRef}
               value={input}
+              rows={1}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') {
+                if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
                   submit();
                 }
@@ -782,6 +810,9 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
           <div className="hints">
             <span>
               <b>↵</b> save
+            </span>
+            <span>
+              <b>⇧↵</b> newline
             </span>
             <span>
               <b>esc</b> clear
