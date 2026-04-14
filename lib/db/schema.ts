@@ -39,6 +39,13 @@ export const bucketNames = sqliteTable('bucket_names', {
   meHidden: integer('me_hidden', { mode: 'boolean' }).notNull().default(false),
 });
 
+export const clusterEdges = sqliteTable('cluster_edges', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  bgA: text('bg_a').notNull(),
+  bgB: text('bg_b').notNull(),
+  weight: real('weight').notNull().default(5),
+});
+
 export type Person = typeof people.$inferSelect;
 export type NewPerson = typeof people.$inferInsert;
 export type Thought = typeof thoughts.$inferSelect;

@@ -49,6 +49,13 @@ sqlite.exec(`
     bg TEXT PRIMARY KEY,
     name TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS cluster_edges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    bg_a TEXT NOT NULL,
+    bg_b TEXT NOT NULL,
+    weight REAL NOT NULL DEFAULT 5,
+    UNIQUE(bg_a, bg_b)
+  );
 `);
 
 // runtime migration: add description + pin_to_me columns if missing

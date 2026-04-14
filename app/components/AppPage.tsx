@@ -8,6 +8,7 @@ import GraphCanvas, {
   type GraphPayload,
   type EdgeSelection,
   type RopeSelection,
+  type ClusterEdgeSelection,
 } from '../canvas';
 
 const TAG_KEYS = ['highagency', 'highsignal', 'interesting', 'fun', 'friends', 'important', 'helpful', 'boring'] as const;
@@ -24,6 +25,7 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
   const [selected, setSelected] = useState<GraphNode | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<EdgeSelection | null>(null);
   const [selectedRope, setSelectedRope] = useState<RopeSelection | null>(null);
+  const [selectedClusterEdge, setSelectedClusterEdge] = useState<ClusterEdgeSelection | null>(null);
   const [focusId, setFocusId] = useState<number | null>(null);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
@@ -359,6 +361,58 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
     setSelectedRope(null);
   };
 
+  const orderPair = (a: string, b: string): [string, string] => (a < b ? [a, b] : [b, a]);
+
+  const handleConnectClusters = async (bgA: string, bgB: string) => {
+    if (bgA === bgB) return;
+    const [a, b] = orderPair(bgA, bgB);
+    setGraph((g) => {
+      const list = [...(g.clusterEdges ?? [])];
+      const existing = list.find((e) => e.a === a && e.b === b);
+      if (existing) existing.weight = 5;
+      else list.push({ a, b, weight: 5 });
+      return { ...g, clusterEdges: list };
+    });
+    await fetch('/api/cluster-edges', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ bgA: a, bgB: b, weight: 5 }),
+    });
+  };
+
+  const patchClusterEdge = async (bgA: string, bgB: string, weight: number) => {
+    const [a, b] = orderPair(bgA, bgB);
+    const w = Math.max(0, Math.min(10, weight));
+    setGraph((g) => {
+      const list = (g.clusterEdges ?? []).map((e) =>
+        e.a === a && e.b === b ? { ...e, weight: w } : e
+      );
+      return { ...g, clusterEdges: list };
+    });
+    setSelectedClusterEdge((sel) =>
+      sel && sel.a === a && sel.b === b ? { ...sel, weight: w } : sel
+    );
+    await fetch('/api/cluster-edges', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ bgA: a, bgB: b, weight: w }),
+    });
+  };
+
+  const deleteClusterEdge = async (bgA: string, bgB: string) => {
+    const [a, b] = orderPair(bgA, bgB);
+    setGraph((g) => ({
+      ...g,
+      clusterEdges: (g.clusterEdges ?? []).filter((e) => !(e.a === a && e.b === b)),
+    }));
+    setSelectedClusterEdge(null);
+    await fetch('/api/cluster-edges', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ bgA: a, bgB: b }),
+    });
+  };
+
   const customNames = graph.bucketNames ?? {};
   // only custom names — presets intentionally empty so clusters stay unnamed until the user names them.
   const labelFor = (bg: string) => customNames[bg] ?? '';
@@ -473,8 +527,18 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
             if (r) {
               setSelected(null);
               setSelectedEdge(null);
+              setSelectedClusterEdge(null);
             }
           }}
+          onSelectClusterEdge={(ce) => {
+            setSelectedClusterEdge(ce);
+            if (ce) {
+              setSelected(null);
+              setSelectedEdge(null);
+              setSelectedRope(null);
+            }
+          }}
+          onConnectClusters={handleConnectClusters}
           onClusterClick={(bg, sx, sy) => {
             const existing = (graph.bucketNames ?? {})[bg] ?? '';
             setClusterNamePopup({ bg, x: sx, y: sy, value: existing });
@@ -907,6 +971,50 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
             </div>
             <button className="dd-delete-person" onClick={() => hideRope(selectedRope.bg)}>
               hide rope
+            </button>
+          </div>
+        )}
+
+        {selectedClusterEdge && (
+          <div className="detail-drawer">
+            <div className="dd-head">
+              <div>
+                <div className="dd-name">
+                  {customNames[selectedClusterEdge.a] || selectedClusterEdge.a}{' '}
+                  <span style={{ color: 'var(--fg-muted)' }}>↔</span>{' '}
+                  {customNames[selectedClusterEdge.b] || selectedClusterEdge.b}
+                </div>
+                <div className="dd-sub">cluster connection</div>
+              </div>
+              <button className="dd-close" onClick={() => setSelectedClusterEdge(null)}>
+                ×
+              </button>
+            </div>
+            <div>
+              <div className="dd-section-label">strength</div>
+              <div className="dd-strength">
+                <input
+                  type="range"
+                  min={0}
+                  max={10}
+                  step={0.5}
+                  value={selectedClusterEdge.weight}
+                  onChange={(e) =>
+                    patchClusterEdge(
+                      selectedClusterEdge.a,
+                      selectedClusterEdge.b,
+                      Number(e.target.value)
+                    )
+                  }
+                />
+                <span className="dd-strength-val">{selectedClusterEdge.weight.toFixed(1)}</span>
+              </div>
+            </div>
+            <button
+              className="dd-delete-person"
+              onClick={() => deleteClusterEdge(selectedClusterEdge.a, selectedClusterEdge.b)}
+            >
+              delete cluster edge
             </button>
           </div>
         )}

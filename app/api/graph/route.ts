@@ -25,6 +25,7 @@ export async function GET() {
   const allMentions = await db.query.mentions.findMany();
   const overrides = await db.query.edgeOverrides.findMany();
   const bucketRows = await db.query.bucketNames.findMany();
+  const clusterEdgeRows = await db.query.clusterEdges.findMany();
   const bucketNames: Record<string, string> = {};
   const bucketRopes: Record<string, { weight: number | null; hidden: boolean }> = {};
   for (const r of bucketRows) {
@@ -83,7 +84,9 @@ export async function GET() {
     emitted.add(k);
   }
 
-  return NextResponse.json({ nodes, edges, bucketNames, bucketRopes });
+  const clusterEdges = clusterEdgeRows.map((r) => ({ a: r.bgA, b: r.bgB, weight: r.weight }));
+
+  return NextResponse.json({ nodes, edges, bucketNames, bucketRopes, clusterEdges });
 }
 
 function safeTags(json: string): string[] {

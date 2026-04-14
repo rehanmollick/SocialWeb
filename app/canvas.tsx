@@ -13,11 +13,13 @@ export type GraphNode = {
   pinToMe?: boolean;
 };
 export type GraphEdge = { source: number; target: number; weight: number };
+export type ClusterEdge = { a: string; b: string; weight: number };
 export type GraphPayload = {
   nodes: GraphNode[];
   edges: GraphEdge[];
   bucketNames?: Record<string, string>;
   bucketRopes?: Record<string, { weight: number | null; hidden: boolean }>;
+  clusterEdges?: ClusterEdge[];
 };
 
 type SimNode = GraphNode &
@@ -215,12 +217,15 @@ type GraphCanvasProps = {
   onConnect?: (aId: number, bId: number) => void;
   onPinToMe?: (id: number) => void;
   onSelectRope?: (sel: RopeSelection | null) => void;
+  onConnectClusters?: (bgA: string, bgB: string) => void;
+  onSelectClusterEdge?: (sel: ClusterEdgeSelection | null) => void;
   onCreateAt?: (screenX: number, screenY: number, bg: string) => void;
   onMoveGroup?: (ids: number[]) => void;
   focusId?: number | null;
 };
 
 export type RopeSelection = { bg: string };
+export type ClusterEdgeSelection = { a: string; b: string; weight: number };
 
 type Runtime = {
   canvas: HTMLCanvasElement;
@@ -235,7 +240,7 @@ function primaryTagOf(tags: string[]): string {
   return 'friends';
 }
 
-export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterClick, onHazeFaded, onConnect, onPinToMe, onSelectRope, onCreateAt, onMoveGroup, focusId }: GraphCanvasProps) {
+export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterClick, onHazeFaded, onConnect, onPinToMe, onSelectRope, onConnectClusters, onSelectClusterEdge, onCreateAt, onMoveGroup, focusId }: GraphCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const onSelectRef = useRef(onSelect);
@@ -245,6 +250,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
   const onConnectRef = useRef(onConnect);
   const onPinToMeRef = useRef(onPinToMe);
   const onSelectRopeRef = useRef(onSelectRope);
+  const onConnectClustersRef = useRef(onConnectClusters);
+  const onSelectClusterEdgeRef = useRef(onSelectClusterEdge);
   const onCreateAtRef = useRef(onCreateAt);
   const onMoveGroupRef = useRef(onMoveGroup);
   const runtimeRef = useRef<Runtime | null>(null);
@@ -256,6 +263,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
   onConnectRef.current = onConnect;
   onPinToMeRef.current = onPinToMe;
   onSelectRopeRef.current = onSelectRope;
+  onConnectClustersRef.current = onConnectClusters;
+  onSelectClusterEdgeRef.current = onSelectClusterEdge;
   onCreateAtRef.current = onCreateAt;
   onMoveGroupRef.current = onMoveGroup;
   graphRef.current = graph;
@@ -584,6 +593,11 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     const gLinks: SimLink[] = [];
     // rope hit-test segments rebuilt every frame during draw. world coords.
     let ropeHitSegs: Array<{ bg: string; x: number; y: number }> = [];
+    // live bucket centroids rebuilt every frame — used by both rope draw
+    // and the shift+drag cluster-to-cluster connector.
+    const bucketCentroid: Record<string, { x: number; y: number }> = {};
+    // cluster-edge hit-test segments rebuilt every frame. world coords.
+    let clusterEdgeSegs: Array<{ a: string; b: string; ax: number; ay: number; bx: number; by: number }> = [];
 
     const anchorForce = () => {
       for (const n of gNodes) {
@@ -917,6 +931,21 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     let connectFromYou = false;
     let connectMouseW = { x: 0, y: 0 };
     let justConnected = false;
+    let clusterDragBg: string | null = null;
+    const CLUSTER_CENTER_HIT_R = 46;
+    const hitBucketCenter = (wx: number, wy: number): string | null => {
+      let best: string | null = null;
+      let bestD2 = CLUSTER_CENTER_HIT_R * CLUSTER_CENTER_HIT_R;
+      for (const bg of Object.keys(bucketCentroid)) {
+        const c = bucketCentroid[bg];
+        const d2 = (c.x - wx) ** 2 + (c.y - wy) ** 2;
+        if (d2 < bestD2) {
+          bestD2 = d2;
+          best = bg;
+        }
+      }
+      return best;
+    };
     const YOU_HIT_R2 = 28 * 28;
     const nearYou = (wx: number, wy: number) => wx * wx + wy * wy <= YOU_HIT_R2;
     const screenToWorld = (clientX: number, clientY: number) => {
@@ -999,7 +1028,12 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         connectSource = null;
         connectFromYou = true;
       } else {
-        return;
+        const bgHit = hitBucketCenter(w.x, w.y);
+        if (bgHit) {
+          clusterDragBg = bgHit;
+        } else {
+          return;
+        }
       }
       connectMouseW = w;
       try {
@@ -1030,7 +1064,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         ev.stopPropagation();
         return;
       }
-      if (!connectSource && !connectFromYou) return;
+      if (!connectSource && !connectFromYou && !clusterDragBg) return;
       connectMouseW = screenToWorld(ev.clientX, ev.clientY);
       ev.stopPropagation();
     };
@@ -1082,6 +1116,20 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           justConnected = true;
         }
         connectFromYou = false;
+        try {
+          canvas.releasePointerCapture(ev.pointerId);
+        } catch {}
+        ev.stopPropagation();
+        return;
+      }
+      if (clusterDragBg) {
+        const w = screenToWorld(ev.clientX, ev.clientY);
+        const targetBg = hitBucketCenter(w.x, w.y);
+        if (targetBg && targetBg !== clusterDragBg) {
+          onConnectClustersRef.current?.(clusterDragBg, targetBg);
+          justConnected = true;
+        }
+        clusterDragBg = null;
         try {
           canvas.releasePointerCapture(ev.pointerId);
         } catch {}
@@ -1203,6 +1251,34 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         return;
       }
 
+      // cluster-edge hit test
+      let bestCE: { a: string; b: string; weight: number } | null = null;
+      let bestCEDist = 16 / currentTransform.k;
+      const cEdgeList = graphRef.current.clusterEdges ?? [];
+      for (const seg of clusterEdgeSegs) {
+        const dx = seg.bx - seg.ax;
+        const dy = seg.by - seg.ay;
+        const len2 = dx * dx + dy * dy;
+        if (len2 < 0.01) continue;
+        const u = ((wx - seg.ax) * dx + (wy - seg.ay) * dy) / len2;
+        if (u < 0.05 || u > 0.95) continue;
+        const px = seg.ax + u * dx;
+        const py = seg.ay + u * dy;
+        const d = Math.hypot(wx - px, wy - py);
+        if (d < bestCEDist) {
+          bestCEDist = d;
+          const rec = cEdgeList.find((e) => e.a === seg.a && e.b === seg.b);
+          bestCE = { a: seg.a, b: seg.b, weight: rec?.weight ?? 5 };
+        }
+      }
+      if (bestCE) {
+        onSelectClusterEdgeRef.current?.(bestCE);
+        onSelectRef.current?.(null);
+        onSelectEdgeRef.current?.(null);
+        onSelectRopeRef.current?.(null);
+        return;
+      }
+
       // check if click is within a visible haze and has no user-set name yet
       // any visible haze is clickable — empty ones get named, named ones open
       // for rename/delete. AppPage reads the current name from graph.bucketNames.
@@ -1229,6 +1305,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       onSelectRef.current?.(null);
       onSelectEdgeRef.current?.(null);
       onSelectRopeRef.current?.(null);
+      onSelectClusterEdgeRef.current?.(null);
+      if (selectedIds.size > 0) selectedIds.clear();
     };
     canvas.addEventListener('click', onClick);
 
@@ -2029,40 +2107,64 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
 
-      type RopeAgg = { sumS: number; n: number };
+      type RopeAgg = { sumS: number; sumX: number; sumY: number; n: number };
       const ropeAgg: Record<string, RopeAgg> = {};
       for (const n of gNodes) {
         if (n.pinToMe) continue;
         // every non-empty bucket gets a rope — subgroups that form on the fly
-        // need a visible tie to "you" right away.
-        const a = (ropeAgg[n.bg] ||= { sumS: 0, n: 0 });
+        // need a visible tie to "you" right away. we also aggregate positions
+        // so we can rope to a live centroid when the haze isn't up yet.
+        const a = (ropeAgg[n.bg] ||= { sumS: 0, sumX: 0, sumY: 0, n: 0 });
         a.sumS += n.s;
+        a.sumX += n.x ?? 0;
+        a.sumY += n.y ?? 0;
         a.n += 1;
       }
       const bucketRopes = graphRef.current.bucketRopes ?? {};
       ropeHitSegs = [];
+      // rebuild the live bucket centroid map (hoisted above so the shift+drag
+      // handler can target haze centers). prefer the haze center when the
+      // haze is up, since that's where the user visually sees the cluster.
+      for (const k of Object.keys(bucketCentroid)) delete bucketCentroid[k];
       for (const bg of Object.keys(ropeAgg)) {
         const agg = ropeAgg[bg];
         if (agg.n < 1) continue;
         const st = hazeState[bg];
-        if (!st || st.a < 0.05) continue;
+        if (st && st.a >= 0.05) {
+          bucketCentroid[bg] = { x: st.x, y: st.y };
+        } else {
+          bucketCentroid[bg] = { x: agg.sumX / agg.n, y: agg.sumY / agg.n };
+        }
+      }
+      const liveCentroid = bucketCentroid;
+      for (const bg of Object.keys(ropeAgg)) {
+        const agg = ropeAgg[bg];
+        if (agg.n < 1) continue;
         const override = bucketRopes[bg];
         if (override?.hidden) continue;
+        const st = hazeState[bg];
+        // prefer the haze centroid when it's visible; fall back to the live
+        // bucket centroid so brand-new clusters get a rope immediately.
+        const hazeVisible = !!st && st.a >= 0.05;
+        const tx = hazeVisible ? st!.x : liveCentroid[bg].x;
+        const ty = hazeVisible ? st!.y : liveCentroid[bg].y;
+        if (!hazeVisible && agg.n < 2) continue; // don't rope a solo dot
         const avgS = agg.sumS / agg.n;
         // user-set weight wins; otherwise fall back to the live avg strength
         const displayS = override?.weight != null ? override.weight : avgS;
         const norm = displayS / 10;
         const sizeBoost = Math.min(1.4, 0.85 + Math.log10(agg.n + 1) * 0.45);
         const pulseMul = displayS >= 7 ? 0.88 + 0.12 * Math.sin(tSec * 1.4 + displayS) : 1;
-        const alpha = (Math.pow(norm, 1.1) * 0.55 + 0.08) * pulseMul * Math.min(1, st.a * 1.4);
+        const hazeMul = hazeVisible ? Math.min(1, st!.a * 1.4) : 0.55;
+        const alpha = (Math.pow(norm, 1.1) * 0.55 + 0.08) * pulseMul * hazeMul;
         const width = ((Math.pow(norm, 1.2) * 4 + 0.6) * sizeBoost) / currentTransform.k;
         ctx.strokeStyle = `rgba(220,225,255,${alpha})`;
         ctx.lineWidth = width;
         ctx.beginPath();
         ctx.moveTo(0, 0);
-        ctx.lineTo(st.x, st.y);
+        ctx.lineTo(tx, ty);
         ctx.stroke();
-        ropeHitSegs.push({ bg, x: st.x, y: st.y });
+        ropeHitSegs.push({ bg, x: tx, y: ty });
       }
 
       // pinned direct lines (and any non-clustered/online pinned)
@@ -2096,6 +2198,59 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         ctx.moveTo(src.x ?? 0, src.y ?? 0);
         ctx.lineTo(tgt.x ?? 0, tgt.y ?? 0);
         ctx.stroke();
+      }
+
+      // ===== persistent cluster-to-cluster edges =====
+      clusterEdgeSegs = [];
+      const cEdges = graphRef.current.clusterEdges ?? [];
+      if (cEdges.length > 0) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        for (const ce of cEdges) {
+          const ca = bucketCentroid[ce.a];
+          const cb = bucketCentroid[ce.b];
+          if (!ca || !cb) continue;
+          const norm = Math.max(0, Math.min(1, ce.weight / 10));
+          const alpha = 0.18 + norm * 0.55;
+          const width = (0.6 + norm * 2.4) / currentTransform.k;
+          ctx.strokeStyle = `rgba(200,220,255,${alpha})`;
+          ctx.lineWidth = width;
+          ctx.setLineDash([8 / currentTransform.k, 5 / currentTransform.k]);
+          ctx.beginPath();
+          ctx.moveTo(ca.x, ca.y);
+          ctx.lineTo(cb.x, cb.y);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          clusterEdgeSegs.push({ a: ce.a, b: ce.b, ax: ca.x, ay: ca.y, bx: cb.x, by: cb.y });
+        }
+        ctx.restore();
+      }
+
+      // ===== in-progress cluster-to-cluster drag =====
+      if (clusterDragBg) {
+        const cs = bucketCentroid[clusterDragBg];
+        if (cs) {
+          ctx.save();
+          ctx.globalCompositeOperation = 'lighter';
+          ctx.strokeStyle = 'rgba(200,230,255,0.9)';
+          ctx.lineWidth = 2.2 / currentTransform.k;
+          ctx.setLineDash([7 / currentTransform.k, 4 / currentTransform.k]);
+          ctx.beginPath();
+          ctx.moveTo(cs.x, cs.y);
+          ctx.lineTo(connectMouseW.x, connectMouseW.y);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          const hoverBg = hitBucketCenter(connectMouseW.x, connectMouseW.y);
+          if (hoverBg && hoverBg !== clusterDragBg) {
+            const ht = bucketCentroid[hoverBg];
+            ctx.strokeStyle = 'rgba(180,255,220,0.9)';
+            ctx.lineWidth = 1.6 / currentTransform.k;
+            ctx.beginPath();
+            ctx.arc(ht.x, ht.y, 30, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
       }
 
       // ===== in-progress connect line (shift+drag) =====
@@ -2160,6 +2315,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       }
 
       // ===== cluster labels (only user-named clusters) =====
+      // sits just outside the haze horizon so the name crowns the cluster
+      // rather than floating inside it. scales with zoom so it stays readable.
       const bucketNames = graphRef.current.bucketNames ?? {};
       for (const bg of bgOrder) {
         const st = hazeState[bg];
@@ -2167,23 +2324,30 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         const label = bucketNames[bg];
         if (!label) continue;
         const count = counts[bg] || 0;
-        const mainSize = 13 / currentTransform.k;
-        const subSize = 9 / currentTransform.k;
-        const shadowOff = 1 / currentTransform.k;
-        const labelY = st.y - st.r - 14;
+        const mainSize = 20 / currentTransform.k;
+        const subSize = 11 / currentTransform.k;
+        const shadowOff = 1.5 / currentTransform.k;
+        // place the label just outside the haze edge — a small gap so it
+        // breathes, then sit on top.
+        const gap = 14 / currentTransform.k;
+        const labelY = st.y - st.r - gap;
         ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
+        ctx.textBaseline = 'alphabetic';
         ctx.globalAlpha = Math.min(1, st.a);
-        ctx.font = `600 ${mainSize}px Inter, sans-serif`;
-        ctx.fillStyle = 'rgba(0,0,0,0.9)';
+        // dark halo for legibility over any background
+        ctx.font = `700 ${mainSize}px Inter, sans-serif`;
+        ctx.fillStyle = 'rgba(0,0,0,0.85)';
         ctx.fillText(label, st.x + shadowOff, labelY + shadowOff);
-        ctx.fillStyle = hexToRgba(bgColors[bg], 0.98);
+        ctx.fillText(label, st.x - shadowOff, labelY + shadowOff);
+        // main fill in the cluster color, bright
+        ctx.fillStyle = hexToRgba(bgColors[bg] ?? '#cfd8ff', 1);
         ctx.fillText(label, st.x, labelY);
+        // count pill underneath the name, still above the haze
         ctx.font = `${subSize}px 'JetBrains Mono', monospace`;
         ctx.fillStyle = 'rgba(0,0,0,0.8)';
-        ctx.fillText(`${count}`, st.x + shadowOff, labelY + 15 / currentTransform.k + shadowOff);
-        ctx.fillStyle = 'rgba(180,180,180,0.75)';
-        ctx.fillText(`${count}`, st.x, labelY + 15 / currentTransform.k);
+        ctx.fillText(`${count}`, st.x + shadowOff, labelY + subSize + 4 / currentTransform.k + shadowOff);
+        ctx.fillStyle = 'rgba(200,200,210,0.8)';
+        ctx.fillText(`${count}`, st.x, labelY + subSize + 4 / currentTransform.k);
         ctx.globalAlpha = 1;
       }
 
