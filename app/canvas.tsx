@@ -174,6 +174,21 @@ type Comet = {
   tilt: number;
   tint: string;
 };
+type Asteroid = {
+  x: number;
+  y: number;
+  size: number;
+  rot: number;
+  alpha: number;
+  shape: number; // pseudo-random seed for jagged silhouette
+};
+type AsteroidBelt = {
+  cx: number;
+  cy: number;
+  rInner: number;
+  rOuter: number;
+  rocks: { angle: number; rad: number; size: number; alpha: number; shape: number }[];
+};
 type Shooting = {
   x: number;
   y: number;
@@ -287,6 +302,9 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     const planets: Planet[] = [];
     const blackHoles: BlackHole[] = [];
     const comets: Comet[] = [];
+    const asteroids: Asteroid[] = [];
+    const asteroidBelts: AsteroidBelt[] = [];
+    const distantGiants: Galaxy[] = [];
     const hazeState: Record<string, HazeState> = {};
     const fadedBg: Record<string, boolean> = {};
     let lastShootSpawn = 0;
@@ -392,8 +410,9 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     }
 
     const galaxyTints = ['#c9b5ff', '#b5d7ff', '#ffd1b5', '#b5ffea', '#ffb5d7', '#d7ffb5'];
-    for (let i = 0; i < 14; i++) {
-      const r = 700 + Math.random() * 900;
+    for (let i = 0; i < 36; i++) {
+      // first half mid-distance, second half pushed way out
+      const r = i < 18 ? 700 + Math.random() * 900 : 1700 + Math.random() * 1500;
       const ang = Math.random() * Math.PI * 2;
       const spiral = Math.random() > 0.45 ? 1 : 0;
       galaxies.push({
@@ -409,16 +428,34 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       });
     }
 
+    // a handful of HUGE distant galaxies in the deep outer rim
+    for (let i = 0; i < 6; i++) {
+      const r = 2200 + Math.random() * 1800;
+      const ang = Math.random() * Math.PI * 2;
+      const spiral = Math.random() > 0.35 ? 1 : 0;
+      distantGiants.push({
+        x: Math.cos(ang) * r,
+        y: Math.sin(ang) * r,
+        rx: 180 + Math.random() * 220,
+        ry: spiral ? 180 + Math.random() * 220 : 60 + Math.random() * 90,
+        rot: Math.random() * Math.PI,
+        alpha: 0.04 + Math.random() * 0.05,
+        tint: galaxyTints[i % galaxyTints.length],
+        spiral,
+        armCount: 2 + Math.floor(Math.random() * 3),
+      });
+    }
+
     // small background galaxies — clearly galaxy-shaped
     const miniTints = ['#c9b5ff', '#b5d7ff', '#ffd1b5', '#b5ffea', '#ffb5e6', '#e6d4ff'];
     const miniKinds: MiniGalaxy['kind'][] = ['spiral', 'spiral', 'barred', 'elliptical'];
-    for (let i = 0; i < 22; i++) {
-      const r = 500 + Math.random() * 1400;
+    for (let i = 0; i < 70; i++) {
+      const r = 600 + Math.random() * 2800;
       const ang = Math.random() * Math.PI * 2;
       miniGalaxies.push({
         x: Math.cos(ang) * r,
         y: Math.sin(ang) * r,
-        size: 10 + Math.random() * 18,
+        size: 8 + Math.random() * 22,
         rot: Math.random() * Math.PI * 2,
         tint: miniTints[i % miniTints.length],
         arms: 2 + Math.floor(Math.random() * 3),
@@ -429,13 +466,13 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
 
     // planets scattered in outer space
     const planetTints = ['#d4a674', '#7ab0d4', '#d474a6', '#74d4a6', '#b574d4', '#d4d474'];
-    for (let i = 0; i < 9; i++) {
-      const r = 550 + Math.random() * 1000;
+    for (let i = 0; i < 24; i++) {
+      const r = 600 + Math.random() * 2400;
       const ang = Math.random() * Math.PI * 2;
       planets.push({
         x: Math.cos(ang) * r,
         y: Math.sin(ang) * r,
-        radius: 4 + Math.random() * 8,
+        radius: 4 + Math.random() * 9,
         tint: planetTints[i % planetTints.length],
         ring: Math.random() > 0.55,
         ringTilt: Math.random() * Math.PI,
@@ -444,32 +481,67 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       });
     }
 
-    // 1-2 distant black holes with accretion rings
-    for (let i = 0; i < 2; i++) {
-      const r = 950 + Math.random() * 400;
+    // a few distant black holes with accretion rings
+    for (let i = 0; i < 4; i++) {
+      const r = 1100 + Math.random() * 1600;
       const ang = Math.random() * Math.PI * 2;
       blackHoles.push({
         x: Math.cos(ang) * r,
         y: Math.sin(ang) * r,
-        radius: 14 + Math.random() * 10,
+        radius: 14 + Math.random() * 14,
         rot: Math.random() * Math.PI * 2,
         spinSpeed: 0.3 + Math.random() * 0.4,
       });
     }
 
-    // long-period comets on elliptical orbits
+    // long-period comets — big sweeping orbits that pass through outer space
     const cometTints = ['#b5d7ff', '#ffd1b5', '#c9b5ff', '#b5ffea'];
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 14; i++) {
+      const wide = i >= 7;
       comets.push({
-        orbitCx: (Math.random() - 0.5) * 200,
-        orbitCy: (Math.random() - 0.5) * 200,
-        a: 650 + Math.random() * 450,
-        b: 280 + Math.random() * 220,
+        orbitCx: (Math.random() - 0.5) * (wide ? 600 : 200),
+        orbitCy: (Math.random() - 0.5) * (wide ? 600 : 200),
+        a: wide ? 1400 + Math.random() * 1200 : 650 + Math.random() * 450,
+        b: wide ? 700 + Math.random() * 600 : 280 + Math.random() * 220,
         theta: Math.random() * Math.PI * 2,
-        speed: 0.04 + Math.random() * 0.06,
+        speed: (wide ? 0.018 : 0.04) + Math.random() * 0.05,
         tilt: Math.random() * Math.PI * 2,
         tint: cometTints[i % cometTints.length],
       });
+    }
+
+    // freely-drifting asteroids in the outer rim
+    for (let i = 0; i < 180; i++) {
+      const r = 750 + Math.random() * 2500;
+      const ang = Math.random() * Math.PI * 2;
+      asteroids.push({
+        x: Math.cos(ang) * r,
+        y: Math.sin(ang) * r,
+        size: 0.8 + Math.random() * 2.6,
+        rot: Math.random() * Math.PI * 2,
+        alpha: 0.18 + Math.random() * 0.35,
+        shape: Math.random() * 1000,
+      });
+    }
+
+    // asteroid belts — rings of dense small rocks orbiting the deep outer rim
+    for (let bi = 0; bi < 3; bi++) {
+      const cx = (Math.random() - 0.5) * 200;
+      const cy = (Math.random() - 0.5) * 200;
+      const rInner = 1400 + bi * 500 + Math.random() * 200;
+      const rOuter = rInner + 80 + Math.random() * 100;
+      const rocks: AsteroidBelt['rocks'] = [];
+      const count = 220 + Math.floor(Math.random() * 120);
+      for (let i = 0; i < count; i++) {
+        rocks.push({
+          angle: Math.random() * Math.PI * 2,
+          rad: rInner + Math.random() * (rOuter - rInner),
+          size: 0.5 + Math.random() * 1.6,
+          alpha: 0.18 + Math.random() * 0.35,
+          shape: Math.random() * 1000,
+        });
+      }
+      asteroidBelts.push({ cx, cy, rInner, rOuter, rocks });
     }
 
     // ===== persistent data arrays (mutated across graph updates) =====
@@ -1284,10 +1356,10 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       }
       ctx.restore();
 
-      // ===== galaxies =====
+      // ===== galaxies (regular + distant giants) =====
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
-      for (const gx of galaxies) {
+      for (const gx of [...distantGiants, ...galaxies]) {
         ctx.save();
         ctx.translate(gx.x, gx.y);
         ctx.rotate(gx.rot + tSec * 0.015);
@@ -1395,6 +1467,47 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         ctx.fill();
 
         ctx.restore();
+      }
+      ctx.restore();
+
+      // ===== asteroids (free-drifting outer rocks) =====
+      ctx.save();
+      ctx.globalCompositeOperation = 'source-over';
+      for (const a of asteroids) {
+        ctx.save();
+        ctx.translate(a.x, a.y);
+        ctx.rotate(a.rot + tSec * 0.05);
+        ctx.fillStyle = `rgba(180,170,160,${a.alpha})`;
+        ctx.beginPath();
+        // jagged silhouette: 6-7 vertices with seeded jitter
+        const verts = 6;
+        for (let v = 0; v < verts; v++) {
+          const ang = (v / verts) * Math.PI * 2;
+          const wob = 0.7 + 0.3 * Math.sin(a.shape + v * 1.7);
+          const px = Math.cos(ang) * a.size * wob;
+          const py = Math.sin(ang) * a.size * wob;
+          if (v === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+      ctx.restore();
+
+      // ===== asteroid belts (dense rings of small rocks) =====
+      ctx.save();
+      ctx.globalCompositeOperation = 'source-over';
+      for (const belt of asteroidBelts) {
+        for (const rock of belt.rocks) {
+          const ang = rock.angle + tSec * 0.008;
+          const x = belt.cx + Math.cos(ang) * rock.rad;
+          const y = belt.cy + Math.sin(ang) * rock.rad;
+          ctx.fillStyle = `rgba(170,160,150,${rock.alpha})`;
+          ctx.beginPath();
+          ctx.arc(x, y, rock.size, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
       ctx.restore();
 
