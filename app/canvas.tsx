@@ -1,0 +1,1265 @@
+'use client';
+
+import { useEffect, useRef } from 'react';
+import * as d3 from 'd3';
+
+export type GraphNode = {
+  id: number;
+  name: string;
+  bg: string;
+  strength: number;
+  tags: string[];
+};
+export type GraphEdge = { source: number; target: number; weight: number };
+export type GraphPayload = {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  bucketNames?: Record<string, string>;
+};
+
+type SimNode = GraphNode &
+  d3.SimulationNodeDatum & {
+    s: number;
+    _ax?: number;
+    _ay?: number;
+    _pinned?: boolean;
+    _starPhase?: number;
+    _liveBg?: string | null;
+    primary?: string;
+  };
+
+type SimLink = d3.SimulationLinkDatum<SimNode> & {
+  weight: number;
+  strength: number;
+};
+
+const tagColors: Record<string, string> = {
+  highsignal: '#f5d78e',
+  highagency: '#ffe98a',
+  interesting: '#6ec4b4',
+  fun: '#e89999',
+  friends: '#8fc08f',
+  important: '#d4a659',
+  helpful: '#a897c9',
+  boring: '#4a4a4a',
+};
+
+const bgLabels: Record<string, string> = {
+  plano: 'plano east',
+  ut: 'ut austin',
+  allen: 'allen',
+  sf: 'sf / work',
+  family: 'family',
+  climb: 'climbing gym',
+  online: 'online',
+};
+const bgSubtitle: Record<string, string> = {
+  plano: 'high school',
+  ut: 'college',
+  allen: 'grew up here',
+  sf: 'current city',
+  family: 'blood',
+  climb: 'hobby',
+  online: 'internet',
+};
+const bgColors: Record<string, string> = {
+  plano: '#7a9cb8',
+  ut: '#c89060',
+  allen: '#78a88c',
+  sf: '#b8b8c8',
+  family: '#d4a474',
+  climb: '#98b478',
+  online: '#9c82b8',
+};
+const bgOrder = ['plano', 'ut', 'allen', 'sf', 'family', 'climb', 'online'] as const;
+const CLUSTER_RADIUS = 340;
+
+const bgCenters: Record<string, { x: number; y: number; angle: number }> = {};
+bgOrder.forEach((bg, i) => {
+  const angle = (i / bgOrder.length) * Math.PI * 2 - Math.PI / 2;
+  bgCenters[bg] = {
+    x: Math.cos(angle) * CLUSTER_RADIUS,
+    y: Math.sin(angle) * CLUSTER_RADIUS,
+    angle,
+  };
+});
+
+function hexToRgba(hex: string, a: number): string {
+  const h = hex.replace('#', '');
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${a})`;
+}
+
+type Star = {
+  x: number;
+  y: number;
+  size: number;
+  baseAlpha: number;
+  phase: number;
+  speed: number;
+  depth: number;
+  tint: string;
+  hasCross: boolean;
+};
+type Nebula = {
+  x: number;
+  y: number;
+  radius: number;
+  color: string;
+  alpha: number;
+  drift: number;
+  driftY: number;
+  pulsePhase: number;
+  pulseSpeed: number;
+};
+type Mote = { x: number; y: number; size: number; alpha: number; vx: number; vy: number };
+type Constellation = { points: Star[]; alpha: number; phase: number };
+type Orbiter = {
+  radius: number;
+  theta: number;
+  speed: number;
+  size: number;
+  alpha: number;
+  trail: number;
+};
+type Galaxy = {
+  x: number;
+  y: number;
+  rx: number;
+  ry: number;
+  rot: number;
+  alpha: number;
+  tint: string;
+};
+type Shooting = {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  maxLife: number;
+  bornAt: number;
+  tint: string;
+  thickness: number;
+};
+type HazeState = { x: number; y: number; r: number; a: number };
+
+export type EdgeSelection = { a: number; b: number; weight: number };
+
+type GraphCanvasProps = {
+  graph: GraphPayload;
+  onSelect?: (node: GraphNode | null) => void;
+  onSelectEdge?: (edge: EdgeSelection | null) => void;
+  focusId?: number | null;
+};
+
+type Runtime = {
+  canvas: HTMLCanvasElement;
+  wrap: HTMLDivElement;
+  zoom: d3.ZoomBehavior<HTMLCanvasElement, unknown>;
+  gNodes: SimNode[];
+  applyGraph: (g: GraphPayload) => void;
+};
+
+function primaryTagOf(tags: string[]): string {
+  for (const t of tags) if (t !== 'highagency' && t in tagColors) return t;
+  return 'friends';
+}
+
+export default function GraphCanvas({ graph, onSelect, onSelectEdge, focusId }: GraphCanvasProps) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const onSelectRef = useRef(onSelect);
+  const onSelectEdgeRef = useRef(onSelectEdge);
+  const runtimeRef = useRef<Runtime | null>(null);
+  const graphRef = useRef<GraphPayload>(graph);
+  onSelectRef.current = onSelect;
+  onSelectEdgeRef.current = onSelectEdge;
+  graphRef.current = graph;
+
+  useEffect(() => {
+    if (focusId == null) return;
+    const rt = runtimeRef.current;
+    if (!rt) return;
+    const n = rt.gNodes.find((g) => g.id === focusId);
+    if (!n || n.x == null || n.y == null) return;
+    const w = rt.wrap.clientWidth;
+    const h = rt.wrap.clientHeight;
+    const k = 1.5;
+    const tx = w / 2 - n.x * k;
+    const ty = h / 2 - n.y * k;
+    d3.select(rt.canvas)
+      .transition()
+      .duration(650)
+      .call(rt.zoom.transform, d3.zoomIdentity.translate(tx, ty).scale(k));
+  }, [focusId]);
+
+  // mount-once effect: set up canvas, simulation, render loop, event handlers
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const wrap = wrapRef.current;
+    if (!canvas || !wrap) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    let width = wrap.clientWidth;
+    let height = wrap.clientHeight;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const startTime = performance.now();
+
+    const resize = () => {
+      width = wrap.clientWidth;
+      height = wrap.clientHeight;
+      canvas.width = width * dpr;
+      canvas.height = height * dpr;
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+    };
+    resize();
+
+    // ===== star field =====
+    const twinkleStars: Star[] = [];
+    const shootingStars: Shooting[] = [];
+    const nebulae: Nebula[] = [];
+    const dustMotes: Mote[] = [];
+    const constellations: Constellation[] = [];
+    const orbiters: Orbiter[] = [];
+    const galaxies: Galaxy[] = [];
+    const hazeState: Record<string, HazeState> = {};
+    let lastShootSpawn = 0;
+
+    const layers = [
+      { count: 220, rMin: 120, rMax: 1100, size: [0.25, 0.65], alpha: [0.08, 0.28], speed: [0.2, 0.7], depth: 0.35 },
+      { count: 140, rMin: 100, rMax: 900, size: [0.45, 1.1], alpha: [0.18, 0.5], speed: [0.4, 1.1], depth: 0.65 },
+      { count: 55, rMin: 80, rMax: 780, size: [0.9, 1.8], alpha: [0.35, 0.9], speed: [0.6, 1.6], depth: 1.0 },
+    ];
+    for (const lay of layers) {
+      for (let i = 0; i < lay.count; i++) {
+        const r = lay.rMin + Math.random() * (lay.rMax - lay.rMin);
+        const ang = Math.random() * Math.PI * 2;
+        const colorBias = Math.random();
+        let tint = '#ffffff';
+        if (colorBias > 0.9) tint = '#d8e6ff';
+        else if (colorBias > 0.82) tint = '#ffe8d4';
+        else if (colorBias > 0.76) tint = '#e8d4ff';
+        twinkleStars.push({
+          x: Math.cos(ang) * r,
+          y: Math.sin(ang) * r,
+          size: lay.size[0] + Math.random() * (lay.size[1] - lay.size[0]),
+          baseAlpha: lay.alpha[0] + Math.random() * (lay.alpha[1] - lay.alpha[0]),
+          phase: Math.random() * Math.PI * 2,
+          speed: lay.speed[0] + Math.random() * (lay.speed[1] - lay.speed[0]),
+          depth: lay.depth,
+          tint,
+          hasCross: lay.depth === 1 && Math.random() > 0.82,
+        });
+      }
+    }
+
+    const nebColors = ['#6b8dd4', '#8b6bd4', '#d46b8b', '#6bd4c2', '#d4b66b'];
+    for (let i = 0; i < 7; i++) {
+      const r = 450 + Math.random() * 420;
+      const ang = Math.random() * Math.PI * 2;
+      nebulae.push({
+        x: Math.cos(ang) * r,
+        y: Math.sin(ang) * r,
+        radius: 180 + Math.random() * 220,
+        color: nebColors[i % nebColors.length],
+        alpha: 0.05 + Math.random() * 0.06,
+        drift: (Math.random() - 0.5) * 0.05,
+        driftY: (Math.random() - 0.5) * 0.05,
+        pulsePhase: Math.random() * Math.PI * 2,
+        pulseSpeed: 0.1 + Math.random() * 0.2,
+      });
+    }
+
+    for (let i = 0; i < 90; i++) {
+      const r = 80 + Math.random() * 820;
+      const ang = Math.random() * Math.PI * 2;
+      dustMotes.push({
+        x: Math.cos(ang) * r,
+        y: Math.sin(ang) * r,
+        size: 0.3 + Math.random() * 0.6,
+        alpha: 0.08 + Math.random() * 0.15,
+        vx: (Math.random() - 0.5) * 0.18,
+        vy: (Math.random() - 0.5) * 0.18,
+      });
+    }
+
+    const sources = twinkleStars.filter((s) => s.depth === 1);
+    for (let c = 0; c < 6; c++) {
+      if (sources.length < 4) break;
+      const seed = sources[Math.floor(Math.random() * sources.length)];
+      const chain: Star[] = [seed];
+      for (let i = 0; i < 3 + Math.floor(Math.random() * 3); i++) {
+        const last = chain[chain.length - 1];
+        let best: Star | null = null;
+        let bestD = Infinity;
+        for (const s of sources) {
+          if (chain.includes(s)) continue;
+          const dx = s.x - last.x;
+          const dy = s.y - last.y;
+          const d = dx * dx + dy * dy;
+          if (d < bestD && d > 400 && d < 40000) {
+            bestD = d;
+            best = s;
+          }
+        }
+        if (!best) break;
+        chain.push(best);
+      }
+      if (chain.length >= 3) {
+        constellations.push({ points: chain, alpha: 0.07 + Math.random() * 0.05, phase: Math.random() * Math.PI * 2 });
+      }
+    }
+
+    const orbitRings = [120, 240, 380, 540, 700];
+    for (const or of orbitRings) {
+      const count = 2 + Math.floor(Math.random() * 3);
+      for (let i = 0; i < count; i++) {
+        orbiters.push({
+          radius: or,
+          theta: Math.random() * Math.PI * 2,
+          speed: (0.06 / (or / 120)) * (Math.random() > 0.5 ? 1 : -1),
+          size: 1 + Math.random() * 0.7,
+          alpha: 0.3 + Math.random() * 0.35,
+          trail: 0.12,
+        });
+      }
+    }
+
+    const galaxyTints = ['#c9b5ff', '#b5d7ff', '#ffd1b5', '#b5ffea'];
+    for (let i = 0; i < 5; i++) {
+      const r = 700 + Math.random() * 450;
+      const ang = Math.random() * Math.PI * 2;
+      galaxies.push({
+        x: Math.cos(ang) * r,
+        y: Math.sin(ang) * r,
+        rx: 28 + Math.random() * 40,
+        ry: 10 + Math.random() * 16,
+        rot: Math.random() * Math.PI,
+        alpha: 0.05 + Math.random() * 0.06,
+        tint: galaxyTints[i % 4],
+      });
+    }
+
+    // ===== persistent data arrays (mutated across graph updates) =====
+    const gNodes: SimNode[] = [];
+    const gLinks: SimLink[] = [];
+
+    const anchorForce = () => {
+      for (const n of gNodes) {
+        if (n._ax == null || n._ay == null) continue;
+        if (n.fx != null) continue;
+        n.vx = (n.vx ?? 0) + (n._ax - (n.x ?? 0)) * 0.02;
+        n.vy = (n.vy ?? 0) + (n._ay - (n.y ?? 0)) * 0.02;
+      }
+    };
+
+    const linkForce = d3
+      .forceLink<SimNode, SimLink>(gLinks)
+      .id((d) => d.id)
+      .distance((l) => 80 / Math.sqrt(l.weight || 1))
+      .strength(0.3);
+
+    const sim = d3
+      .forceSimulation<SimNode>(gNodes)
+      .force('charge', d3.forceManyBody<SimNode>().strength(-180))
+      .force('link', linkForce)
+      .force('collide', d3.forceCollide<SimNode>().radius((n) => 8 + n.s * 0.7))
+      .force('anchor', anchorForce)
+      .alpha(0)
+      .alphaDecay(0.04)
+      .velocityDecay(0.55);
+    sim.stop();
+
+    // lay out ONE bucket's nodes into concentric rings around its center.
+    // only touches unpinned nodes. x/y only set if unset (first placement).
+    const layoutBucket = (bg: string, bucket: SimNode[]) => {
+      const c = bgCenters[bg] ?? bgCenters.online;
+      const unpinned = bucket.filter((n) => !n._pinned);
+      unpinned.sort((a, b) => b.s - a.s || a.name.localeCompare(b.name));
+      const ringStep = 5;
+      let index = 0;
+      for (let ring = 0; index < unpinned.length; ring++) {
+        const capacity = ring === 0 ? 1 : 6 * ring;
+        const radius = ring === 0 ? 0 : ring * 38;
+        const take = Math.min(capacity, unpinned.length - index);
+        for (let i = 0; i < take; i++) {
+          const theta = (i / take) * Math.PI * 2 + (ring % 2) * (Math.PI / ringStep);
+          const n = unpinned[index++];
+          const ax = c.x + Math.cos(theta) * radius;
+          const ay = c.y + Math.sin(theta) * radius;
+          n._ax = ax;
+          n._ay = ay;
+          if (n.x == null || n.y == null) {
+            n.x = ax;
+            n.y = ay;
+          }
+        }
+      }
+    };
+
+    const relayoutAll = () => {
+      const byBucket: Record<string, SimNode[]> = {};
+      for (const n of gNodes) {
+        const bg = n.bg in bgCenters ? n.bg : 'online';
+        (byBucket[bg] ||= []).push(n);
+      }
+      for (const bg of Object.keys(byBucket)) layoutBucket(bg, byBucket[bg]);
+    };
+
+    const applyGraph = (payload: GraphPayload) => {
+      const incomingById = new Map(payload.nodes.map((n) => [n.id, n]));
+      const existingById = new Map(gNodes.map((n) => [n.id, n]));
+
+      // drop nodes no longer present
+      for (let i = gNodes.length - 1; i >= 0; i--) {
+        if (!incomingById.has(gNodes[i].id)) gNodes.splice(i, 1);
+      }
+
+      // upsert nodes: mutate existing in place, add new at their bucket center
+      for (const n of payload.nodes) {
+        const ex = existingById.get(n.id);
+        const tags = Array.isArray(n.tags) ? [...n.tags] : [];
+        if (ex) {
+          ex.name = n.name;
+          ex.bg = n.bg;
+          ex.strength = n.strength;
+          ex.s = n.strength;
+          ex.tags = tags;
+          ex.primary = primaryTagOf(tags);
+        } else {
+          const c = bgCenters[n.bg in bgCenters ? n.bg : 'online'];
+          const jitter = 2 + Math.random() * 6;
+          const ang = Math.random() * Math.PI * 2;
+          const sn: SimNode = {
+            ...n,
+            tags,
+            s: n.strength,
+            primary: primaryTagOf(tags),
+            x: c.x + Math.cos(ang) * jitter,
+            y: c.y + Math.sin(ang) * jitter,
+            vx: 0,
+            vy: 0,
+            _starPhase: Math.random() * Math.PI * 2,
+            _pinned: false,
+          };
+          gNodes.push(sn);
+        }
+      }
+
+      relayoutAll();
+
+      // rebuild links by id -> node ref. replace gLinks array contents in place.
+      gLinks.length = 0;
+      const nodeById = new Map(gNodes.map((n) => [n.id, n]));
+      for (const e of payload.edges) {
+        const s = nodeById.get(e.source);
+        const t = nodeById.get(e.target);
+        if (!s || !t) continue;
+        const strength = Math.min(10, 2 + e.weight * 2);
+        gLinks.push({ source: s, target: t, weight: e.weight, strength });
+      }
+
+      sim.nodes(gNodes);
+      linkForce.links(gLinks);
+      sim.alpha(0.18).restart();
+    };
+
+    // ===== zoom/pan =====
+    const currentTransform = { x: width / 2, y: height / 2, k: 1 };
+    const zoom = d3
+      .zoom<HTMLCanvasElement, unknown>()
+      .scaleExtent([0.25, 4])
+      .on('zoom', (ev) => {
+        currentTransform.x = ev.transform.x;
+        currentTransform.y = ev.transform.y;
+        currentTransform.k = ev.transform.k;
+      });
+    const sel = d3.select(canvas);
+    sel.call(zoom);
+    zoom.transform(sel, d3.zoomIdentity.translate(currentTransform.x, currentTransform.y).scale(1));
+
+    // ===== drag =====
+    let dragStartX = 0;
+    let dragStartY = 0;
+    let dragMoved = false;
+    const drag = d3
+      .drag<HTMLCanvasElement, unknown>()
+      .clickDistance(6)
+      .subject((event) => {
+        const [mx, my] = d3.pointer(event, canvas);
+        const wx = (mx - currentTransform.x) / currentTransform.k;
+        const wy = (my - currentTransform.y) / currentTransform.k;
+        let best: SimNode | null = null;
+        let bestD = 22 * 22;
+        for (const n of gNodes) {
+          const dx = (n.x ?? 0) - wx;
+          const dy = (n.y ?? 0) - wy;
+          const d2 = dx * dx + dy * dy;
+          if (d2 < bestD) {
+            bestD = d2;
+            best = n;
+          }
+        }
+        return best;
+      })
+      .on('start', (event) => {
+        dragMoved = false;
+        dragStartX = event.x;
+        dragStartY = event.y;
+        if (!event.active) sim.alphaTarget(0.25).restart();
+        const n = event.subject as SimNode;
+        n.fx = n.x;
+        n.fy = n.y;
+      })
+      .on('drag', (event) => {
+        const dx = event.x - dragStartX;
+        const dy = event.y - dragStartY;
+        if (dx * dx + dy * dy > 36) dragMoved = true;
+        const n = event.subject as SimNode;
+        n.fx = event.x;
+        n.fy = event.y;
+      })
+      .on('end', (event) => {
+        if (!event.active) sim.alphaTarget(0);
+        const n = event.subject as SimNode;
+        if (dragMoved) {
+          n._ax = n.fx ?? undefined;
+          n._ay = n.fy ?? undefined;
+          n._pinned = true;
+          n.fx = null;
+          n.fy = null;
+          sim.alpha(0.15);
+        } else {
+          n.fx = null;
+          n.fy = null;
+          onSelectRef.current?.({ id: n.id, name: n.name, bg: n.bg, strength: n.s, tags: n.tags });
+          onSelectEdgeRef.current?.(null);
+        }
+      });
+    sel.call(drag);
+
+    const onClick = (ev: MouseEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      const mx = ev.clientX - rect.left;
+      const my = ev.clientY - rect.top;
+      const wx = (mx - currentTransform.x) / currentTransform.k;
+      const wy = (my - currentTransform.y) / currentTransform.k;
+
+      let hitNode: SimNode | null = null;
+      let hitD = 22 * 22;
+      for (const n of gNodes) {
+        const dx = (n.x ?? 0) - wx;
+        const dy = (n.y ?? 0) - wy;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < hitD) {
+          hitD = d2;
+          hitNode = n;
+        }
+      }
+      if (hitNode) {
+        onSelectRef.current?.({
+          id: hitNode.id,
+          name: hitNode.name,
+          bg: hitNode.bg,
+          strength: hitNode.s,
+          tags: hitNode.tags,
+        });
+        onSelectEdgeRef.current?.(null);
+        return;
+      }
+
+      let bestEdge: SimLink | null = null;
+      let bestEdgeDist = 14 / currentTransform.k;
+      for (const l of gLinks) {
+        const s = l.source as SimNode;
+        const t = l.target as SimNode;
+        if (s.x == null || s.y == null || t.x == null || t.y == null) continue;
+        const dx = t.x - s.x;
+        const dy = t.y - s.y;
+        const len2 = dx * dx + dy * dy;
+        if (len2 < 0.01) continue;
+        const u = ((wx - s.x) * dx + (wy - s.y) * dy) / len2;
+        if (u < 0 || u > 1) continue;
+        const px = s.x + u * dx;
+        const py = s.y + u * dy;
+        const d = Math.hypot(wx - px, wy - py);
+        if (d < bestEdgeDist) {
+          bestEdgeDist = d;
+          bestEdge = l;
+        }
+      }
+      if (bestEdge) {
+        const s = bestEdge.source as SimNode;
+        const t = bestEdge.target as SimNode;
+        onSelectEdgeRef.current?.({ a: s.id, b: t.id, weight: bestEdge.weight });
+      } else {
+        onSelectRef.current?.(null);
+        onSelectEdgeRef.current?.(null);
+      }
+    };
+    canvas.addEventListener('click', onClick);
+
+    runtimeRef.current = { canvas, wrap, zoom, gNodes, applyGraph };
+
+    // initial seed from whatever graph was present at mount
+    applyGraph(graphRef.current);
+
+    // ===== render loop =====
+    let raf = 0;
+    const draw = () => {
+      const now = performance.now();
+      sim.tick();
+
+      if (now - lastShootSpawn > 1400 + Math.random() * 800) {
+        lastShootSpawn = now;
+        const edge = Math.floor(Math.random() * 4);
+        const span = 900;
+        let x = 0,
+          y = 0,
+          dx = 0,
+          dy = 0;
+        if (edge === 0) {
+          x = -span;
+          y = -span + Math.random() * span * 2;
+          dx = 1;
+          dy = 0.35;
+        } else if (edge === 1) {
+          x = span;
+          y = -span + Math.random() * span * 2;
+          dx = -1;
+          dy = 0.35;
+        } else if (edge === 2) {
+          x = -span + Math.random() * span * 2;
+          y = -span;
+          dx = 0.4;
+          dy = 1;
+        } else {
+          x = -span + Math.random() * span * 2;
+          y = span;
+          dx = 0.4;
+          dy = -1;
+        }
+        const speed = 4 + Math.random() * 4;
+        const mag = Math.sqrt(dx * dx + dy * dy);
+        const tints = ['#ffffff', '#ffffff', '#ffffff', '#ffffff', '#b5d7ff', '#ffd1b5', '#c9b5ff'];
+        shootingStars.push({
+          x,
+          y,
+          vx: (dx / mag) * speed,
+          vy: (dy / mag) * speed,
+          life: 0,
+          maxLife: 90 + Math.random() * 60,
+          bornAt: now,
+          tint: tints[Math.floor(Math.random() * tints.length)],
+          thickness: 0.9 + Math.random() * 0.8,
+        });
+      }
+
+      for (const m of dustMotes) {
+        m.x += m.vx;
+        m.y += m.vy;
+        if (m.x > 1200) m.x = -1200;
+        if (m.x < -1200) m.x = 1200;
+        if (m.y > 1200) m.y = -1200;
+        if (m.y < -1200) m.y = 1200;
+      }
+      for (const o of orbiters) o.theta += o.speed * 0.016;
+      for (const neb of nebulae) {
+        neb.x += neb.drift;
+        neb.y += neb.driftY;
+      }
+      for (let i = shootingStars.length - 1; i >= 0; i--) {
+        const ss = shootingStars[i];
+        ss.x += ss.vx;
+        ss.y += ss.vy;
+        ss.life += 1;
+        if (ss.life > ss.maxLife) shootingStars.splice(i, 1);
+      }
+
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const bgGrad = ctx.createRadialGradient(
+        canvas.width / 2,
+        canvas.height / 2,
+        0,
+        canvas.width / 2,
+        canvas.height / 2,
+        Math.max(canvas.width, canvas.height)
+      );
+      bgGrad.addColorStop(0, '#0a0c18');
+      bgGrad.addColorStop(0.55, '#05060d');
+      bgGrad.addColorStop(1, '#02030a');
+      ctx.fillStyle = bgGrad;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.translate(currentTransform.x, currentTransform.y);
+      ctx.scale(currentTransform.k, currentTransform.k);
+
+      // ===== live cluster membership =====
+      const MAX_JOIN = 280;
+      const MAX_JOIN_SQ = MAX_JOIN * MAX_JOIN;
+      const seedCenters: Record<string, { x: number; y: number }> = {};
+      for (const bg of bgOrder) {
+        const st = hazeState[bg];
+        if (st && st.a > 0.05) seedCenters[bg] = { x: st.x, y: st.y };
+        else seedCenters[bg] = { x: bgCenters[bg].x, y: bgCenters[bg].y };
+      }
+
+      type Live = { sx: number; sy: number; n: number; maxD2: number; cx: number; cy: number };
+      const liveClusters: Record<string, Live> = {};
+      for (const bg of bgOrder) liveClusters[bg] = { sx: 0, sy: 0, n: 0, maxD2: 0, cx: 0, cy: 0 };
+
+      for (const n of gNodes) {
+        let bestBg: string | null = null;
+        let bestD2 = Infinity;
+        for (const bg of bgOrder) {
+          const s = seedCenters[bg];
+          const dx = (n.x ?? 0) - s.x;
+          const dy = (n.y ?? 0) - s.y;
+          const d2 = dx * dx + dy * dy;
+          if (d2 < bestD2) {
+            bestD2 = d2;
+            bestBg = bg;
+          }
+        }
+        if (bestBg && bestD2 < MAX_JOIN_SQ) {
+          n._liveBg = bestBg;
+          const c = liveClusters[bestBg];
+          c.sx += n.x ?? 0;
+          c.sy += n.y ?? 0;
+          c.n += 1;
+        } else {
+          n._liveBg = null;
+        }
+      }
+      for (const bg in liveClusters) {
+        const c = liveClusters[bg];
+        if (c.n > 0) {
+          c.cx = c.sx / c.n;
+          c.cy = c.sy / c.n;
+        }
+      }
+      for (const n of gNodes) {
+        if (!n._liveBg) continue;
+        const c = liveClusters[n._liveBg];
+        if (!c || c.n === 0) continue;
+        const dx = (n.x ?? 0) - c.cx;
+        const dy = (n.y ?? 0) - c.cy;
+        const d2 = dx * dx + dy * dy;
+        if (d2 > c.maxD2) c.maxD2 = d2;
+      }
+      const counts: Record<string, number> = {};
+      for (const bg in liveClusters) counts[bg] = liveClusters[bg].n;
+
+      const tSec = (now - startTime) / 1000;
+      const hazePulse = 1 + 0.06 * Math.sin(tSec * 0.8);
+      const lerp = 0.09;
+      const shrinkLerp = 0.055;
+      for (const bg of bgOrder) {
+        const live = liveClusters[bg];
+        const seed = bgCenters[bg];
+        let st = hazeState[bg];
+        if (!st) {
+          st = hazeState[bg] = { x: seed.x, y: seed.y, r: 0, a: 0 };
+        }
+        if (live.n > 0) {
+          const spread = Math.sqrt(live.maxD2) + 50;
+          const targetR = Math.max(90, spread * 1.45);
+          const targetA = Math.min(1, 0.45 + live.n * 0.13);
+          const radiusLerp = targetR > st.r ? lerp : shrinkLerp;
+          const alphaLerp = targetA > st.a ? lerp : shrinkLerp;
+          st.x += (live.cx - st.x) * lerp;
+          st.y += (live.cy - st.y) * lerp;
+          st.r += (targetR - st.r) * radiusLerp;
+          st.a += (targetA - st.a) * alphaLerp;
+        } else {
+          st.a += (0 - st.a) * 0.08;
+          st.r += (40 - st.r) * 0.08;
+        }
+      }
+
+      // ===== haze layer =====
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      for (const bg of bgOrder) {
+        const st = hazeState[bg];
+        if (!st || st.a < 0.01) continue;
+        const color = bgColors[bg];
+        const radius = st.r * hazePulse;
+        const grad = ctx.createRadialGradient(st.x, st.y, 0, st.x, st.y, radius);
+        grad.addColorStop(0, hexToRgba(color, 0.3 * st.a));
+        grad.addColorStop(0.45, hexToRgba(color, 0.09 * st.a));
+        grad.addColorStop(1, hexToRgba(color, 0));
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(st.x, st.y, radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+
+      // ===== nebulae =====
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      for (const neb of nebulae) {
+        const pulse = 0.85 + 0.15 * Math.sin(neb.pulsePhase + tSec * neb.pulseSpeed);
+        const r = neb.radius * pulse;
+        const g = ctx.createRadialGradient(neb.x, neb.y, 0, neb.x, neb.y, r);
+        g.addColorStop(0, hexToRgba(neb.color, neb.alpha));
+        g.addColorStop(0.35, hexToRgba(neb.color, neb.alpha * 0.45));
+        g.addColorStop(1, hexToRgba(neb.color, 0));
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(neb.x, neb.y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+
+      // ===== galaxies =====
+      for (const gx of galaxies) {
+        ctx.save();
+        ctx.translate(gx.x, gx.y);
+        ctx.rotate(gx.rot);
+        const gg = ctx.createRadialGradient(0, 0, 0, 0, 0, gx.rx);
+        gg.addColorStop(0, hexToRgba(gx.tint, gx.alpha * 2.2));
+        gg.addColorStop(0.5, hexToRgba(gx.tint, gx.alpha * 0.8));
+        gg.addColorStop(1, hexToRgba(gx.tint, 0));
+        ctx.fillStyle = gg;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, gx.rx, gx.ry, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = hexToRgba('#ffffff', gx.alpha * 2.5);
+        ctx.beginPath();
+        ctx.ellipse(0, 0, gx.rx * 0.18, gx.ry * 0.18, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+
+      // ===== dust motes =====
+      ctx.save();
+      for (const d of dustMotes) {
+        ctx.fillStyle = `rgba(220,220,240,${d.alpha})`;
+        ctx.beginPath();
+        ctx.arc(d.x, d.y, d.size / Math.max(currentTransform.k, 0.5), 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+
+      // ===== twinkle stars =====
+      ctx.save();
+      for (const s of twinkleStars) {
+        const tw = 0.5 + 0.5 * Math.sin(s.phase + tSec * s.speed);
+        const a = s.baseAlpha * tw;
+        const sz = s.size / Math.max(currentTransform.k, 0.5);
+        ctx.fillStyle = s.tint === '#ffffff' ? `rgba(255,255,255,${a})` : hexToRgba(s.tint, a);
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, sz, 0, Math.PI * 2);
+        ctx.fill();
+        if (s.hasCross && a > 0.5) {
+          ctx.strokeStyle = hexToRgba(s.tint, a * 0.55);
+          ctx.lineWidth = 0.4 / currentTransform.k;
+          const cl = sz * 3.5;
+          ctx.beginPath();
+          ctx.moveTo(s.x - cl, s.y);
+          ctx.lineTo(s.x + cl, s.y);
+          ctx.moveTo(s.x, s.y - cl);
+          ctx.lineTo(s.x, s.y + cl);
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+
+      // ===== constellations =====
+      ctx.save();
+      for (const con of constellations) {
+        const tw = 0.7 + 0.3 * Math.sin(con.phase + tSec * 0.6);
+        ctx.strokeStyle = `rgba(255,255,255,${con.alpha * tw})`;
+        ctx.lineWidth = 0.35 / currentTransform.k;
+        ctx.beginPath();
+        for (let i = 0; i < con.points.length; i++) {
+          const p = con.points[i];
+          if (i === 0) ctx.moveTo(p.x, p.y);
+          else ctx.lineTo(p.x, p.y);
+        }
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // ===== shooting stars =====
+      for (const ss of shootingStars) {
+        const t = ss.life / ss.maxLife;
+        const fade = 1 - t;
+        const trailLen = 120;
+        const tx = ss.x - ss.vx * trailLen * 0.35;
+        const ty = ss.y - ss.vy * trailLen * 0.35;
+        const grad = ctx.createLinearGradient(tx, ty, ss.x, ss.y);
+        grad.addColorStop(0, hexToRgba(ss.tint, 0));
+        grad.addColorStop(0.6, hexToRgba(ss.tint, 0.3 * fade));
+        grad.addColorStop(1, hexToRgba(ss.tint, 0.95 * fade));
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = ss.thickness / currentTransform.k;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(tx, ty);
+        ctx.lineTo(ss.x, ss.y);
+        ctx.stroke();
+        ctx.lineCap = 'butt';
+        const hg = ctx.createRadialGradient(ss.x, ss.y, 0, ss.x, ss.y, 6);
+        hg.addColorStop(0, hexToRgba(ss.tint, fade));
+        hg.addColorStop(1, hexToRgba(ss.tint, 0));
+        ctx.fillStyle = hg;
+        ctx.beginPath();
+        ctx.arc(ss.x, ss.y, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = `rgba(255,255,255,${fade})`;
+        ctx.beginPath();
+        ctx.arc(ss.x, ss.y, 1.4 / currentTransform.k, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // ===== astral rings =====
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+      ctx.lineWidth = 0.5 / currentTransform.k;
+      for (const r of [90, 180, 270, 360, 460, 570]) {
+        ctx.beginPath();
+        ctx.arc(0, 0, r, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      ctx.setLineDash([2 / currentTransform.k, 6 / currentTransform.k]);
+      ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+      ctx.beginPath();
+      ctx.arc(0, 0, 690, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(0, 0, 820, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      const tickRing = 460;
+      const tickRot = tSec * 0.04;
+      ctx.strokeStyle = 'rgba(255,255,255,0.09)';
+      ctx.lineWidth = 0.6 / currentTransform.k;
+      for (let i = 0; i < 60; i++) {
+        const a = (i / 60) * Math.PI * 2 + tickRot;
+        const tlen = i % 5 === 0 ? 10 : 4;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a) * tickRing, Math.sin(a) * tickRing);
+        ctx.lineTo(Math.cos(a) * (tickRing + tlen), Math.sin(a) * (tickRing + tlen));
+        ctx.stroke();
+      }
+      const tickRot2 = -tSec * 0.07;
+      ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+      for (let i = 0; i < 36; i++) {
+        const a = (i / 36) * Math.PI * 2 + tickRot2;
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a) * 270, Math.sin(a) * 270);
+        ctx.lineTo(Math.cos(a) * 277, Math.sin(a) * 277);
+        ctx.stroke();
+      }
+      const reticlePulse = 0.85 + 0.15 * Math.sin(tSec * 0.9);
+      ctx.fillStyle = `rgba(255,255,255,${0.08 * reticlePulse})`;
+      const rLen = 6;
+      for (const [dx, dy] of [
+        [1, 0],
+        [-1, 0],
+        [0, 1],
+        [0, -1],
+      ]) {
+        const cx = dx * 570;
+        const cy = dy * 570;
+        ctx.beginPath();
+        ctx.moveTo(cx + dx * rLen, cy + dy * rLen);
+        ctx.lineTo(cx - dy * rLen * 0.7, cy + dx * rLen * 0.7);
+        ctx.lineTo(cx + dy * rLen * 0.7, cy - dx * rLen * 0.7);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+
+      // ===== orbiters =====
+      ctx.save();
+      for (const o of orbiters) {
+        const ox = Math.cos(o.theta) * o.radius;
+        const oy = Math.sin(o.theta) * o.radius;
+        const ox2 = Math.cos(o.theta - o.trail) * o.radius;
+        const oy2 = Math.sin(o.theta - o.trail) * o.radius;
+        const tg = ctx.createLinearGradient(ox2, oy2, ox, oy);
+        tg.addColorStop(0, 'rgba(255,255,255,0)');
+        tg.addColorStop(1, `rgba(255,255,255,${o.alpha})`);
+        ctx.strokeStyle = tg;
+        ctx.lineWidth = (o.size * 0.7) / currentTransform.k;
+        ctx.beginPath();
+        ctx.moveTo(ox2, oy2);
+        ctx.lineTo(ox, oy);
+        ctx.stroke();
+        ctx.fillStyle = `rgba(255,255,255,${o.alpha})`;
+        ctx.beginPath();
+        ctx.arc(ox, oy, o.size / currentTransform.k, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+
+      // ===== me edges (you -> every person with strength > 0) =====
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      for (const n of gNodes) {
+        if (n.s <= 0) continue;
+        const norm = n.s / 10;
+        const alpha = Math.pow(norm, 1.1) * 0.55 + 0.05;
+        const width = (Math.pow(norm, 1.2) * 1.6 + 0.15) / currentTransform.k;
+        ctx.strokeStyle = `rgba(220,225,255,${alpha})`;
+        ctx.lineWidth = width;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(n.x ?? 0, n.y ?? 0);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // ===== peer edges =====
+      for (const l of gLinks) {
+        const s = l.strength;
+        const norm = s / 10;
+        const alpha = Math.pow(norm, 1.2) * 0.95 + 0.03;
+        const width = (Math.pow(norm, 1.3) * 2.7 + 0.25) / currentTransform.k;
+        ctx.strokeStyle = `rgba(255,255,255,${alpha})`;
+        ctx.lineWidth = width;
+        const src = l.source as SimNode;
+        const tgt = l.target as SimNode;
+        ctx.beginPath();
+        ctx.moveTo(src.x ?? 0, src.y ?? 0);
+        ctx.lineTo(tgt.x ?? 0, tgt.y ?? 0);
+        ctx.stroke();
+      }
+
+      // ===== cluster labels =====
+      const bucketNames = graphRef.current.bucketNames ?? {};
+      for (const bg of bgOrder) {
+        const st = hazeState[bg];
+        if (!st || st.a < 0.05) continue;
+        const label = bucketNames[bg] || bgLabels[bg] || bg;
+        const subtitle = bgSubtitle[bg] || '';
+        const count = counts[bg] || 0;
+        const mainSize = 13 / currentTransform.k;
+        const subSize = 9 / currentTransform.k;
+        const shadowOff = 1 / currentTransform.k;
+        const labelY = st.y - st.r - 14;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.globalAlpha = Math.min(1, st.a);
+        ctx.font = `600 ${mainSize}px Inter, sans-serif`;
+        ctx.fillStyle = 'rgba(0,0,0,0.9)';
+        ctx.fillText(label, st.x + shadowOff, labelY + shadowOff);
+        ctx.fillStyle = hexToRgba(bgColors[bg], 0.98);
+        ctx.fillText(label, st.x, labelY);
+        const meta = `${subtitle} · ${count}`;
+        ctx.font = `${subSize}px 'JetBrains Mono', monospace`;
+        ctx.fillStyle = 'rgba(0,0,0,0.8)';
+        ctx.fillText(meta, st.x + shadowOff, labelY + 15 / currentTransform.k + shadowOff);
+        ctx.fillStyle = 'rgba(180,180,180,0.75)';
+        ctx.fillText(meta, st.x, labelY + 15 / currentTransform.k);
+        ctx.globalAlpha = 1;
+      }
+
+      // ===== people nodes =====
+      for (const n of gNodes) {
+        const r = 5 + (n.s / 10) * 2.5;
+        const tags = n.tags;
+        const isStar = tags.includes('highagency');
+        const x = n.x ?? 0;
+        const y = n.y ?? 0;
+
+        if (isStar) {
+          const pulse = 0.75 + 0.25 * Math.sin(tSec * 2.0 + (n._starPhase || 0));
+          const pulseSlow = 0.85 + 0.15 * Math.sin(tSec * 0.7 + (n._starPhase || 0));
+          ctx.save();
+          ctx.globalCompositeOperation = 'lighter';
+          const wideR = r * 11 * pulseSlow;
+          const wide = ctx.createRadialGradient(x, y, 0, x, y, wideR);
+          wide.addColorStop(0, 'rgba(255,255,255,0.18)');
+          wide.addColorStop(0.18, 'rgba(180,230,255,0.13)');
+          wide.addColorStop(0.5, 'rgba(180,230,255,0.04)');
+          wide.addColorStop(1, 'rgba(180,230,255,0)');
+          ctx.fillStyle = wide;
+          ctx.beginPath();
+          ctx.arc(x, y, wideR, 0, Math.PI * 2);
+          ctx.fill();
+          const midR = r * 5.5 * pulse;
+          const mid = ctx.createRadialGradient(x, y, 0, x, y, midR);
+          mid.addColorStop(0, 'rgba(255,255,255,0.95)');
+          mid.addColorStop(0.15, 'rgba(255,250,220,0.55)');
+          mid.addColorStop(0.4, 'rgba(255,230,180,0.18)');
+          mid.addColorStop(1, 'rgba(255,220,180,0)');
+          ctx.fillStyle = mid;
+          ctx.beginPath();
+          ctx.arc(x, y, midR, 0, Math.PI * 2);
+          ctx.fill();
+          const spikeLen = r * 9 * pulse;
+          const spikeW = 0.8 / currentTransform.k;
+          const spikeGrad = (x1: number, y1: number, x2: number, y2: number) => {
+            const g = ctx.createLinearGradient(x1, y1, x2, y2);
+            g.addColorStop(0, 'rgba(255,255,255,0)');
+            g.addColorStop(0.5, 'rgba(255,255,255,0.85)');
+            g.addColorStop(1, 'rgba(255,255,255,0)');
+            return g;
+          };
+          ctx.lineWidth = spikeW;
+          ctx.strokeStyle = spikeGrad(x - spikeLen, y, x + spikeLen, y);
+          ctx.beginPath();
+          ctx.moveTo(x - spikeLen, y);
+          ctx.lineTo(x + spikeLen, y);
+          ctx.stroke();
+          ctx.strokeStyle = spikeGrad(x, y - spikeLen, x, y + spikeLen);
+          ctx.beginPath();
+          ctx.moveTo(x, y - spikeLen);
+          ctx.lineTo(x, y + spikeLen);
+          ctx.stroke();
+          const diagLen = spikeLen * 0.6;
+          const dOff = diagLen / Math.sqrt(2);
+          ctx.lineWidth = spikeW * 0.7;
+          ctx.strokeStyle = spikeGrad(x - dOff, y - dOff, x + dOff, y + dOff);
+          ctx.beginPath();
+          ctx.moveTo(x - dOff, y - dOff);
+          ctx.lineTo(x + dOff, y + dOff);
+          ctx.stroke();
+          ctx.strokeStyle = spikeGrad(x - dOff, y + dOff, x + dOff, y - dOff);
+          ctx.beginPath();
+          ctx.moveTo(x - dOff, y + dOff);
+          ctx.lineTo(x + dOff, y - dOff);
+          ctx.stroke();
+          ctx.restore();
+          const coreR = r * 1.1;
+          const core = ctx.createRadialGradient(x, y, 0, x, y, coreR);
+          core.addColorStop(0, '#ffffff');
+          core.addColorStop(0.4, '#ffffff');
+          core.addColorStop(0.75, 'rgba(255,250,220,0.95)');
+          core.addColorStop(1, 'rgba(255,230,180,0.55)');
+          ctx.fillStyle = core;
+          ctx.beginPath();
+          ctx.arc(x, y, coreR, 0, Math.PI * 2);
+          ctx.fill();
+          // trait ring: shows character trait underneath the agency halo
+          const traitTags = tags.filter((t) => t !== 'highagency' && t in tagColors);
+          if (traitTags.length > 0) {
+            ctx.save();
+            ctx.globalCompositeOperation = 'lighter';
+            ctx.strokeStyle = hexToRgba(tagColors[traitTags[0]], 0.95);
+            ctx.lineWidth = 1.5 / currentTransform.k;
+            ctx.beginPath();
+            ctx.arc(x, y, r * 1.55, 0, Math.PI * 2);
+            ctx.stroke();
+            if (traitTags.length > 1) {
+              ctx.strokeStyle = hexToRgba(tagColors[traitTags[1]], 0.55);
+              ctx.lineWidth = 0.8 / currentTransform.k;
+              ctx.beginPath();
+              ctx.arc(x, y, r * 1.95, 0, Math.PI * 2);
+              ctx.stroke();
+            }
+            ctx.restore();
+          }
+        } else {
+          const knownTags = tags.filter((t) => t in tagColors);
+          const palette = knownTags.length > 0 ? knownTags : [n.primary || 'friends'];
+          if (palette.length === 1) {
+            ctx.fillStyle = tagColors[palette[0]] ?? bgColors[n.bg] ?? '#999';
+            ctx.beginPath();
+            ctx.arc(x, y, r, 0, Math.PI * 2);
+            ctx.fill();
+          } else {
+            const step = (Math.PI * 2) / palette.length;
+            for (let i = 0; i < palette.length; i++) {
+              ctx.fillStyle = tagColors[palette[i]];
+              ctx.beginPath();
+              ctx.moveTo(x, y);
+              ctx.arc(x, y, r, -Math.PI / 2 + i * step, -Math.PI / 2 + (i + 1) * step);
+              ctx.closePath();
+              ctx.fill();
+            }
+          }
+        }
+
+        // ===== name label =====
+        // for stars: bright white, bigger, below the glow, with dark stroke for contrast
+        // for regulars: gray, smaller, close to node
+        const firstName = n.name.split(' ')[0];
+        if (isStar) {
+          const fs = 12 / currentTransform.k;
+          const ly = y + r * 6.2;
+          ctx.font = `600 ${fs}px Inter, sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.lineWidth = 3 / currentTransform.k;
+          ctx.strokeStyle = 'rgba(0,0,0,0.9)';
+          ctx.strokeText(firstName, x, ly);
+          ctx.fillStyle = 'rgba(255,245,220,0.98)';
+          ctx.fillText(firstName, x, ly);
+        } else if (n.s >= 4) {
+          const fs = 10 / currentTransform.k;
+          const ly = y - r - 6 / currentTransform.k;
+          ctx.font = `500 ${fs}px Inter, sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.lineWidth = 2.5 / currentTransform.k;
+          ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+          ctx.strokeText(firstName, x, ly);
+          ctx.fillStyle = 'rgba(210,210,215,0.9)';
+          ctx.fillText(firstName, x, ly);
+        }
+      }
+
+      // ===== "you" node =====
+      ctx.strokeStyle = '#ffffff';
+      ctx.lineWidth = 1 / currentTransform.k;
+      ctx.beginPath();
+      ctx.arc(0, 0, 18, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+      ctx.setLineDash([1 / currentTransform.k, 3 / currentTransform.k]);
+      ctx.beginPath();
+      ctx.arc(0, 0, 26, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.arc(0, 0, 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#ededed';
+      const youFont = 11 / currentTransform.k;
+      ctx.font = `${youFont}px Inter, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.fillText('you', 0, 46);
+
+      raf = requestAnimationFrame(draw);
+    };
+    raf = requestAnimationFrame(draw);
+
+    const ro = new ResizeObserver(resize);
+    ro.observe(wrap);
+    return () => {
+      cancelAnimationFrame(raf);
+      sim.stop();
+      ro.disconnect();
+      canvas.removeEventListener('click', onClick);
+      runtimeRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // data effect: apply graph changes incrementally
+  useEffect(() => {
+    runtimeRef.current?.applyGraph(graph);
+  }, [graph]);
+
+  return (
+    <div ref={wrapRef} style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}>
+      <canvas ref={canvasRef} id="graph-canvas" />
+    </div>
+  );
+}
+
+export { tagColors, bgLabels, bgSubtitle, bgColors, bgOrder };
