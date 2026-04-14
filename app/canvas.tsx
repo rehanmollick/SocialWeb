@@ -578,8 +578,10 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       for (const n of gNodes) {
         if (n._ax == null || n._ay == null) continue;
         if (n.fx != null) continue;
-        n.vx = (n.vx ?? 0) + (n._ax - (n.x ?? 0)) * 0.22;
-        n.vy = (n.vy ?? 0) + (n._ay - (n.y ?? 0)) * 0.22;
+        // stronger pull toward the layout anchor so clusters always tend
+        // toward their geometric polygon formation
+        n.vx = (n.vx ?? 0) + (n._ax - (n.x ?? 0)) * 0.32;
+        n.vy = (n.vy ?? 0) + (n._ay - (n.y ?? 0)) * 0.32;
       }
     };
 
@@ -840,23 +842,23 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         if (!event.active) sim.alphaTarget(0);
         const n = event.subject as SimNode;
         if (dragMoved) {
+          // unpin the moved node(s) and re-layout so the cluster reflows into
+          // a regular polygon. the anchor force will smoothly pull everyone
+          // toward the new geometric formation.
           if (dragGroupStart.length > 0) {
             for (const g of dragGroupStart) {
-              g.n._ax = g.n.fx ?? undefined;
-              g.n._ay = g.n.fy ?? undefined;
-              g.n._pinned = true;
+              g.n._pinned = false;
               g.n.fx = null;
               g.n.fy = null;
             }
             onMoveGroupRef.current?.(dragGroupStart.map((g) => g.n.id));
           } else {
-            n._ax = n.fx ?? undefined;
-            n._ay = n.fy ?? undefined;
-            n._pinned = true;
+            n._pinned = false;
             n.fx = null;
             n.fy = null;
           }
-          sim.alpha(0.15);
+          relayoutAll();
+          sim.alpha(0.5).restart();
         } else {
           n.fx = null;
           n.fy = null;
