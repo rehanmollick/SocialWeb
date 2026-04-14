@@ -2230,10 +2230,13 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           const pulse = 0.88 + 0.12 * Math.sin(tSec * 1.6 + phase);
           ctx.save();
           ctx.globalCompositeOperation = 'lighter';
+          // keep the center mostly transparent so the underlying tag color
+          // reads — brightness collects at the rim, not the middle.
           const overlay = ctx.createRadialGradient(x, y, 0, x, y, r);
-          overlay.addColorStop(0, `rgba(255,255,255,${0.55 * pulse})`);
-          overlay.addColorStop(0.6, `rgba(255,245,215,${0.22 * pulse})`);
-          overlay.addColorStop(1, 'rgba(255,240,200,0)');
+          overlay.addColorStop(0, 'rgba(255,250,230,0)');
+          overlay.addColorStop(0.55, `rgba(255,248,220,${0.06 * pulse})`);
+          overlay.addColorStop(0.9, `rgba(255,245,215,${0.22 * pulse})`);
+          overlay.addColorStop(1, `rgba(255,240,200,${0.3 * pulse})`);
           ctx.fillStyle = overlay;
           ctx.beginPath();
           ctx.arc(x, y, r, 0, Math.PI * 2);
