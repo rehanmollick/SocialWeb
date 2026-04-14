@@ -9,6 +9,9 @@ dist
 
 data/*.db
 data/*.db-journal
+data/*.db.backup-*
+
+.claude/
 
 .DS_Store
 *.log
