@@ -10,22 +10,40 @@ import {
   setBackground,
   renameCluster,
   deletePerson,
+  connectCluster,
+  getGraphSnapshot,
   type ToolResult,
 } from '@/lib/commands';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const SYSTEM = `You are the brain of a personal social-memory graph. The user types one line. Decide: is this a journal entry about their day (mentioning people, events, feelings) OR a direct instruction about the graph?
+const SYSTEM_BASE = `You are the brain of a personal social-memory graph. The user types one line. Decide: is this a journal entry about their day (mentioning people, events, feelings) OR a direct instruction about the graph?
 
 - Journal / free-form note → call log_thought with the raw text. This extracts people automatically and strengthens connections.
-- Direct instructions like "connect sarah and jess strongly", "make alex high agency", "rename sf to bay area crew", "bump mike to 9", "delete jordan" → call the matching tool. You may call multiple tools in one turn.
+- Direct instructions like "connect sarah and jess strongly", "make alex high agency", "rename sf to bay area crew", "bump mike to 9", "delete jordan", "interconnect everyone in the climb cluster" → call the matching tool. You may call multiple tools in one turn.
 
-Buckets: plano, ut, allen, sf, family, climb, online.
+Buckets (internal ids): plano, ut, allen, sf, family, climb, online. The user may refer to a cluster by its custom display name (e.g. "PKP", "bay area crew") — match it to the bucket id from the snapshot below.
 Strength scale: 0 (no connection) to 10 (inseparable). Default connection weight when unspecified: 3 for "connect", 6 for "connect strongly", 8 for "very strong".
 Tag vocabulary includes: highagency, highsignal, interesting, fun, friends, important, helpful, boring. Tags outside this list are fine too.
 
+When the user says something like "make everyone in this cluster interconnected" or "connect all of PKP", use connect_cluster with the bucket id (not the display name). When the user references "this cluster" without naming it, pick the largest cluster from the snapshot or the one most recently mentioned in conversation.
+
 If the user is ambiguous, prefer log_thought. Keep it snappy. Return a short confirmation after your tool calls.`;
+
+function snapshotToText(snap: Awaited<ReturnType<typeof getGraphSnapshot>>): string {
+  if (snap.totalPeople === 0) return 'GRAPH SNAPSHOT: empty (no people yet).';
+  const lines = [`GRAPH SNAPSHOT (${snap.totalPeople} people across ${snap.clusters.length} clusters):`];
+  for (const c of snap.clusters) {
+    const label = c.name ? `"${c.name}" [${c.bg}]` : `${c.bg} (unnamed)`;
+    lines.push(`- ${label} — ${c.people.length} people:`);
+    for (const p of c.people) {
+      const tagStr = p.tags.length ? ` {${p.tags.join(',')}}` : '';
+      lines.push(`    · ${p.name} (s=${p.strength})${tagStr}`);
+    }
+  }
+  return lines.join('\n');
+}
 
 const tools: Anthropic.Tool[] = [
   {
@@ -114,6 +132,19 @@ const tools: Anthropic.Tool[] = [
       required: ['name'],
     },
   },
+  {
+    name: 'connect_cluster',
+    description:
+      'Create pairwise connections between every person in a cluster (bucket). Use for "make everyone in this cluster interconnected" or "connect all of PKP". Pass the bucket id (e.g. "climb"), not the display name.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        bg: { type: 'string', description: 'Bucket id: plano, ut, allen, sf, family, climb, online' },
+        weight: { type: 'number', description: '0-10 strength for each new edge (default 5)' },
+      },
+      required: ['bg'],
+    },
+  },
 ];
 
 async function runTool(name: string, input: Record<string, unknown>): Promise<ToolResult> {
@@ -141,6 +172,8 @@ async function runTool(name: string, input: Record<string, unknown>): Promise<To
       return renameCluster(s('bg'), s('name'));
     case 'delete_person':
       return deletePerson(s('name'));
+    case 'connect_cluster':
+      return connectCluster(s('bg'), n('weight', 5));
     default:
       return { ok: false, message: `unknown tool ${name}` };
   }
@@ -159,6 +192,8 @@ export async function POST(req: Request) {
   }
 
   const client = new Anthropic({ apiKey });
+  const snapshot = await getGraphSnapshot();
+  const system = `${SYSTEM_BASE}\n\n${snapshotToText(snapshot)}`;
   const messages: Anthropic.MessageParam[] = [{ role: 'user', content: body }];
   const steps: string[] = [];
   let finalText = '';
@@ -167,7 +202,7 @@ export async function POST(req: Request) {
     const res = await client.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 1024,
-      system: SYSTEM,
+      system,
       tools,
       messages,
     });

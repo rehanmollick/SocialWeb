@@ -228,3 +228,63 @@ export async function deletePerson(name: string): Promise<ToolResult> {
   await db.delete(schema.people).where(eq(schema.people.id, p.id));
   return { ok: true, message: `deleted ${p.name}` };
 }
+
+export async function connectCluster(
+  bg: string,
+  weight = 5
+): Promise<ToolResult> {
+  if (!isBg(bg)) return { ok: false, message: `unknown bucket: ${bg}` };
+  const members = await db.query.people.findMany({
+    where: eq(schema.people.bg, bg),
+  });
+  if (members.length < 2) {
+    return { ok: false, message: `not enough people in ${bg} to interconnect` };
+  }
+  const w = Math.max(0, Math.min(10, weight));
+  let pairs = 0;
+  for (let i = 0; i < members.length; i++) {
+    for (let j = i + 1; j < members.length; j++) {
+      await upsertEdge(members[i].id, members[j].id, { weight: w, deleted: false });
+      pairs++;
+    }
+  }
+  return {
+    ok: true,
+    message: `interconnected ${members.length} people in ${bg} (${pairs} edges @ ${w})`,
+  };
+}
+
+export type GraphSnapshot = {
+  clusters: Array<{
+    bg: string;
+    name: string | null;
+    people: Array<{ name: string; strength: number; tags: string[] }>;
+  }>;
+  totalPeople: number;
+};
+
+export async function getGraphSnapshot(): Promise<GraphSnapshot> {
+  const allPeople = await db.query.people.findMany();
+  const allBuckets = await db.query.bucketNames.findMany();
+  const nameByBg = new Map(allBuckets.map((b) => [b.bg, b.name]));
+  const byBg = new Map<string, typeof allPeople>();
+  for (const p of allPeople) {
+    const arr = byBg.get(p.bg) ?? [];
+    arr.push(p);
+    byBg.set(p.bg, arr);
+  }
+  const clusters = Array.from(byBg.entries())
+    .sort((a, b) => b[1].length - a[1].length)
+    .map(([bg, ppl]) => ({
+      bg,
+      name: nameByBg.get(bg) ?? null,
+      people: ppl
+        .sort((a, b) => b.strength - a.strength)
+        .map((p) => ({
+          name: p.name,
+          strength: p.strength,
+          tags: parseTags(p.tags),
+        })),
+    }));
+  return { clusters, totalPeople: allPeople.length };
+}

@@ -6,16 +6,6 @@ import { db, schema } from '@/lib/db';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const BG_LABELS: Record<string, string> = {
-  plano: 'plano east (high school)',
-  ut: 'ut austin (college)',
-  allen: 'allen (grew up)',
-  sf: 'sf / work',
-  family: 'family',
-  climb: 'climbing gym',
-  online: 'online',
-};
-
 export async function POST(req: Request) {
   const { question } = (await req.json()) as { question?: string };
   if (!question || !question.trim()) {
@@ -28,6 +18,9 @@ export async function POST(req: Request) {
     limit: 30,
   });
   const mentions = await db.query.mentions.findMany();
+  const buckets = await db.query.bucketNames.findMany();
+  const customBgName = new Map(buckets.map((b) => [b.bg, b.name]));
+  const labelFor = (bg: string) => customBgName.get(bg) ?? `${bg} (unnamed)`;
 
   const nameById = new Map(people.map((p) => [p.id, p.name]));
   const mentionsByThought = new Map<number, string[]>();
@@ -39,11 +32,25 @@ export async function POST(req: Request) {
     mentionsByThought.set(m.thoughtId, arr);
   }
 
-  const peopleLines = people
-    .map((p) => {
-      const tags = safeTags(p.tags);
-      const tagStr = tags.length ? ` [${tags.join(', ')}]` : '';
-      return `- ${p.name} · ${BG_LABELS[p.bg] ?? p.bg} · strength ${p.strength.toFixed(1)}${tagStr}`;
+  const peopleByBg = new Map<string, typeof people>();
+  for (const p of people) {
+    const arr = peopleByBg.get(p.bg) ?? [];
+    arr.push(p);
+    peopleByBg.set(p.bg, arr);
+  }
+  const clusterLines = Array.from(peopleByBg.entries())
+    .sort((a, b) => b[1].length - a[1].length)
+    .map(([bg, members]) => {
+      const header = `${labelFor(bg)} [${bg}] — ${members.length} people:`;
+      const rows = members
+        .sort((a, b) => b.strength - a.strength)
+        .map((p) => {
+          const tags = safeTags(p.tags);
+          const tagStr = tags.length ? ` [${tags.join(', ')}]` : '';
+          return `  - ${p.name} · strength ${p.strength.toFixed(1)}${tagStr}`;
+        })
+        .join('\n');
+      return `${header}\n${rows}`;
     })
     .join('\n');
 
@@ -57,10 +64,10 @@ export async function POST(req: Request) {
 
   const referencedPeople: string[] = [];
 
-  const system = `You are the user's social memory. You answer questions about people they know using only the graph below. Be concrete, reference specific people and thoughts when relevant, and keep answers to 2-4 sentences. If the graph has no answer, say so plainly.
+  const system = `You are the user's social memory. You answer questions about people they know using only the graph below. Be concrete, reference specific people and thoughts when relevant, and keep answers to 2-4 sentences. If the graph has no answer, say so plainly. Cluster names in quotes are the user's own labels for groups of people; refer to them by name when relevant.
 
-PEOPLE (${people.length}):
-${peopleLines || '(none yet)'}
+PEOPLE GROUPED BY CLUSTER (${people.length} total):
+${clusterLines || '(none yet)'}
 
 RECENT THOUGHTS (${thoughts.length}):
 ${thoughtLines || '(none yet)'}`;
