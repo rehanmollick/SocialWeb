@@ -711,6 +711,10 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     const applyGraph = (payload: GraphPayload) => {
       const incomingById = new Map(payload.nodes.map((n) => [n.id, n]));
       const existingById = new Map(gNodes.map((n) => [n.id, n]));
+      // ids that arrived without a saved x/y — we'll persist whatever
+      // layoutBucket computes for them so even untouched new people stay
+      // anchored on reload.
+      const freshlyLaidOut: number[] = [];
 
       // drop nodes no longer present
       for (let i = gNodes.length - 1; i >= 0; i--) {
@@ -740,6 +744,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
               ex.x = n.x as number;
               ex.y = n.y as number;
             }
+          } else {
+            freshlyLaidOut.push(n.id);
           }
         } else {
           const c = bgCenters[n.bg in bgCenters ? n.bg : 'online'];
@@ -762,12 +768,30 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
             _ay: hasSaved ? (n.y as number) : undefined,
           };
           gNodes.push(sn);
+          if (!hasSaved) freshlyLaidOut.push(n.id);
         }
       }
 
       // only nodes without a saved position get auto-layout. saved-position
       // nodes keep their anchor (_pinned=true makes layoutBucket skip them).
       relayoutAll();
+
+      // persist the just-computed anchors for any node that arrived without
+      // a saved position. fire-and-forget — the server is the source of
+      // truth on the next reload.
+      if (freshlyLaidOut.length > 0 && onSavePositionsRef.current) {
+        const byId = new Map(gNodes.map((nd) => [nd.id, nd]));
+        const pts: Array<{ id: number; x: number | null; y: number | null }> = [];
+        for (const id of freshlyLaidOut) {
+          const nd = byId.get(id);
+          if (!nd) continue;
+          const ax = nd._ax ?? nd.x ?? null;
+          const ay = nd._ay ?? nd.y ?? null;
+          if (ax == null || ay == null) continue;
+          pts.push({ id, x: ax, y: ay });
+        }
+        if (pts.length > 0) onSavePositionsRef.current(pts);
+      }
 
       // rebuild links by id -> node ref. replace gLinks array contents in place.
       gLinks.length = 0;
