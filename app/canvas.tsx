@@ -153,6 +153,16 @@ type BlackHole = {
   rot: number;
   spinSpeed: number;
 };
+type MiniGalaxy = {
+  x: number;
+  y: number;
+  size: number;
+  rot: number;
+  tint: string;
+  arms: number;
+  tightness: number;
+  kind: 'spiral' | 'barred' | 'elliptical';
+};
 type Comet = {
   orbitCx: number;
   orbitCy: number;
@@ -272,6 +282,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     const constellations: Constellation[] = [];
     const orbiters: Orbiter[] = [];
     const galaxies: Galaxy[] = [];
+    const miniGalaxies: MiniGalaxy[] = [];
     const planets: Planet[] = [];
     const blackHoles: BlackHole[] = [];
     const comets: Comet[] = [];
@@ -394,6 +405,24 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         tint: galaxyTints[i % galaxyTints.length],
         spiral,
         armCount: 2 + Math.floor(Math.random() * 3),
+      });
+    }
+
+    // small background galaxies — clearly galaxy-shaped
+    const miniTints = ['#c9b5ff', '#b5d7ff', '#ffd1b5', '#b5ffea', '#ffb5e6', '#e6d4ff'];
+    const miniKinds: MiniGalaxy['kind'][] = ['spiral', 'spiral', 'barred', 'elliptical'];
+    for (let i = 0; i < 22; i++) {
+      const r = 500 + Math.random() * 1400;
+      const ang = Math.random() * Math.PI * 2;
+      miniGalaxies.push({
+        x: Math.cos(ang) * r,
+        y: Math.sin(ang) * r,
+        size: 10 + Math.random() * 18,
+        rot: Math.random() * Math.PI * 2,
+        tint: miniTints[i % miniTints.length],
+        arms: 2 + Math.floor(Math.random() * 3),
+        tightness: 2.5 + Math.random() * 2.5,
+        kind: miniKinds[i % miniKinds.length],
       });
     }
 
@@ -1164,17 +1193,32 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         if (!st || st.a < 0.01) continue;
         const color = bgColors[bg];
         const radius = st.r * hazePulse;
-        const aa = st.a * 0.12; // super subtle
+        const aa = st.a * 0.22; // subtle but visible
 
         // soft body
         const body = ctx.createRadialGradient(st.x, st.y, 0, st.x, st.y, radius);
-        body.addColorStop(0, hexToRgba(color, 0.09 * aa));
-        body.addColorStop(0.5, hexToRgba(color, 0.04 * aa));
+        body.addColorStop(0, hexToRgba(color, 0.14 * aa));
+        body.addColorStop(0.45, hexToRgba(color, 0.07 * aa));
         body.addColorStop(1, hexToRgba(color, 0));
         ctx.fillStyle = body;
         ctx.beginPath();
         ctx.arc(st.x, st.y, radius, 0, Math.PI * 2);
         ctx.fill();
+
+        // two faint drifting wisps
+        for (let i = 0; i < 2; i++) {
+          const theta = (i / 2) * Math.PI * 2 + tSec * 0.1 + bg.length * 0.6;
+          const lx = st.x + Math.cos(theta) * radius * 0.28;
+          const ly = st.y + Math.sin(theta) * radius * 0.28;
+          const lr = radius * 0.45;
+          const lobe = ctx.createRadialGradient(lx, ly, 0, lx, ly, lr);
+          lobe.addColorStop(0, hexToRgba(color, 0.06 * aa));
+          lobe.addColorStop(1, hexToRgba(color, 0));
+          ctx.fillStyle = lobe;
+          ctx.beginPath();
+          ctx.arc(lx, ly, lr, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
       ctx.restore();
 
@@ -1237,6 +1281,74 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         ctx.beginPath();
         ctx.ellipse(0, 0, gx.rx * 0.14, Math.max(gx.ry, gx.rx) * 0.14, 0, 0, Math.PI * 2);
         ctx.fill();
+        ctx.restore();
+      }
+      ctx.restore();
+
+      // ===== mini galaxies (small, clearly galaxy-shaped) =====
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      for (const mg of miniGalaxies) {
+        ctx.save();
+        ctx.translate(mg.x, mg.y);
+        ctx.rotate(mg.rot + tSec * 0.03);
+
+        // halo
+        const halo = ctx.createRadialGradient(0, 0, 0, 0, 0, mg.size * 1.6);
+        halo.addColorStop(0, hexToRgba(mg.tint, 0.35));
+        halo.addColorStop(0.5, hexToRgba(mg.tint, 0.1));
+        halo.addColorStop(1, hexToRgba(mg.tint, 0));
+        ctx.fillStyle = halo;
+        ctx.beginPath();
+        ctx.arc(0, 0, mg.size * 1.6, 0, Math.PI * 2);
+        ctx.fill();
+
+        if (mg.kind === 'elliptical') {
+          const g = ctx.createRadialGradient(0, 0, 0, 0, 0, mg.size);
+          g.addColorStop(0, hexToRgba(mg.tint, 0.9));
+          g.addColorStop(0.4, hexToRgba(mg.tint, 0.4));
+          g.addColorStop(1, hexToRgba(mg.tint, 0));
+          ctx.fillStyle = g;
+          ctx.beginPath();
+          ctx.ellipse(0, 0, mg.size, mg.size * 0.72, 0, 0, Math.PI * 2);
+          ctx.fill();
+        } else {
+          // spiral arms as dense point clouds
+          const steps = 60;
+          for (let arm = 0; arm < mg.arms; arm++) {
+            const armOffset = (arm / mg.arms) * Math.PI * 2;
+            for (let p = 0; p < steps; p++) {
+              const t = p / steps;
+              const radius = t * mg.size;
+              const twist = armOffset + t * mg.tightness;
+              const jitter = (Math.random() - 0.5) * mg.size * 0.08;
+              const px = Math.cos(twist) * radius + jitter;
+              const py = Math.sin(twist) * radius + jitter;
+              const a = (1 - t) * 0.75;
+              ctx.fillStyle = hexToRgba(mg.tint, a);
+              ctx.beginPath();
+              ctx.arc(px, py, 0.6, 0, Math.PI * 2);
+              ctx.fill();
+            }
+          }
+          if (mg.kind === 'barred') {
+            // central bar
+            ctx.fillStyle = hexToRgba(mg.tint, 0.7);
+            ctx.beginPath();
+            ctx.ellipse(0, 0, mg.size * 0.5, mg.size * 0.12, 0, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+
+        // bright nucleus
+        const core = ctx.createRadialGradient(0, 0, 0, 0, 0, mg.size * 0.2);
+        core.addColorStop(0, 'rgba(255,255,255,0.95)');
+        core.addColorStop(1, hexToRgba(mg.tint, 0));
+        ctx.fillStyle = core;
+        ctx.beginPath();
+        ctx.arc(0, 0, mg.size * 0.2, 0, Math.PI * 2);
+        ctx.fill();
+
         ctx.restore();
       }
       ctx.restore();
