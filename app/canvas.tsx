@@ -133,6 +133,35 @@ type Galaxy = {
   rot: number;
   alpha: number;
   tint: string;
+  spiral: number; // 0 = ellipse, 1 = spiral
+  armCount: number;
+};
+type Planet = {
+  x: number;
+  y: number;
+  radius: number;
+  tint: string;
+  ring: boolean;
+  ringTilt: number;
+  ringTint: string;
+  glow: number;
+};
+type BlackHole = {
+  x: number;
+  y: number;
+  radius: number;
+  rot: number;
+  spinSpeed: number;
+};
+type Comet = {
+  orbitCx: number;
+  orbitCy: number;
+  a: number;
+  b: number;
+  theta: number;
+  speed: number;
+  tilt: number;
+  tint: string;
 };
 type Shooting = {
   x: number;
@@ -243,14 +272,17 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     const constellations: Constellation[] = [];
     const orbiters: Orbiter[] = [];
     const galaxies: Galaxy[] = [];
+    const planets: Planet[] = [];
+    const blackHoles: BlackHole[] = [];
+    const comets: Comet[] = [];
     const hazeState: Record<string, HazeState> = {};
     const fadedBg: Record<string, boolean> = {};
     let lastShootSpawn = 0;
 
     const layers = [
-      { count: 220, rMin: 120, rMax: 1100, size: [0.25, 0.65], alpha: [0.08, 0.28], speed: [0.2, 0.7], depth: 0.35 },
-      { count: 140, rMin: 100, rMax: 900, size: [0.45, 1.1], alpha: [0.18, 0.5], speed: [0.4, 1.1], depth: 0.65 },
-      { count: 55, rMin: 80, rMax: 780, size: [0.9, 1.8], alpha: [0.35, 0.9], speed: [0.6, 1.6], depth: 1.0 },
+      { count: 520, rMin: 120, rMax: 1600, size: [0.25, 0.65], alpha: [0.08, 0.28], speed: [0.2, 0.7], depth: 0.35 },
+      { count: 300, rMin: 100, rMax: 1300, size: [0.45, 1.1], alpha: [0.18, 0.5], speed: [0.4, 1.1], depth: 0.65 },
+      { count: 120, rMin: 80, rMax: 1050, size: [0.9, 1.8], alpha: [0.35, 0.9], speed: [0.6, 1.6], depth: 1.0 },
     ];
     for (const lay of layers) {
       for (let i = 0; i < lay.count; i++) {
@@ -275,16 +307,16 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       }
     }
 
-    const nebColors = ['#6b8dd4', '#8b6bd4', '#d46b8b', '#6bd4c2', '#d4b66b'];
-    for (let i = 0; i < 7; i++) {
-      const r = 450 + Math.random() * 420;
+    const nebColors = ['#6b8dd4', '#8b6bd4', '#d46b8b', '#6bd4c2', '#d4b66b', '#b36bd4', '#6bd47a', '#d46b6b'];
+    for (let i = 0; i < 18; i++) {
+      const r = 450 + Math.random() * 900;
       const ang = Math.random() * Math.PI * 2;
       nebulae.push({
         x: Math.cos(ang) * r,
         y: Math.sin(ang) * r,
-        radius: 180 + Math.random() * 220,
+        radius: 180 + Math.random() * 320,
         color: nebColors[i % nebColors.length],
-        alpha: 0.05 + Math.random() * 0.06,
+        alpha: 0.05 + Math.random() * 0.08,
         drift: (Math.random() - 0.5) * 0.05,
         driftY: (Math.random() - 0.5) * 0.05,
         pulsePhase: Math.random() * Math.PI * 2,
@@ -292,8 +324,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       });
     }
 
-    for (let i = 0; i < 90; i++) {
-      const r = 80 + Math.random() * 820;
+    for (let i = 0; i < 200; i++) {
+      const r = 80 + Math.random() * 1200;
       const ang = Math.random() * Math.PI * 2;
       dustMotes.push({
         x: Math.cos(ang) * r,
@@ -306,7 +338,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     }
 
     const sources = twinkleStars.filter((s) => s.depth === 1);
-    for (let c = 0; c < 6; c++) {
+    for (let c = 0; c < 14; c++) {
       if (sources.length < 4) break;
       const seed = sources[Math.floor(Math.random() * sources.length)];
       const chain: Star[] = [seed];
@@ -332,9 +364,9 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       }
     }
 
-    const orbitRings = [120, 240, 380, 540, 700];
+    const orbitRings = [120, 240, 380, 540, 700, 880, 1050, 1220];
     for (const or of orbitRings) {
-      const count = 2 + Math.floor(Math.random() * 3);
+      const count = 3 + Math.floor(Math.random() * 4);
       for (let i = 0; i < count; i++) {
         orbiters.push({
           radius: or,
@@ -347,18 +379,66 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       }
     }
 
-    const galaxyTints = ['#c9b5ff', '#b5d7ff', '#ffd1b5', '#b5ffea'];
-    for (let i = 0; i < 5; i++) {
-      const r = 700 + Math.random() * 450;
+    const galaxyTints = ['#c9b5ff', '#b5d7ff', '#ffd1b5', '#b5ffea', '#ffb5d7', '#d7ffb5'];
+    for (let i = 0; i < 14; i++) {
+      const r = 700 + Math.random() * 900;
       const ang = Math.random() * Math.PI * 2;
+      const spiral = Math.random() > 0.45 ? 1 : 0;
       galaxies.push({
         x: Math.cos(ang) * r,
         y: Math.sin(ang) * r,
-        rx: 28 + Math.random() * 40,
-        ry: 10 + Math.random() * 16,
+        rx: 32 + Math.random() * 70,
+        ry: spiral ? 32 + Math.random() * 70 : 12 + Math.random() * 22,
         rot: Math.random() * Math.PI,
-        alpha: 0.05 + Math.random() * 0.06,
-        tint: galaxyTints[i % 4],
+        alpha: 0.06 + Math.random() * 0.08,
+        tint: galaxyTints[i % galaxyTints.length],
+        spiral,
+        armCount: 2 + Math.floor(Math.random() * 3),
+      });
+    }
+
+    // planets scattered in outer space
+    const planetTints = ['#d4a674', '#7ab0d4', '#d474a6', '#74d4a6', '#b574d4', '#d4d474'];
+    for (let i = 0; i < 9; i++) {
+      const r = 550 + Math.random() * 1000;
+      const ang = Math.random() * Math.PI * 2;
+      planets.push({
+        x: Math.cos(ang) * r,
+        y: Math.sin(ang) * r,
+        radius: 4 + Math.random() * 8,
+        tint: planetTints[i % planetTints.length],
+        ring: Math.random() > 0.55,
+        ringTilt: Math.random() * Math.PI,
+        ringTint: planetTints[(i + 3) % planetTints.length],
+        glow: 0.3 + Math.random() * 0.5,
+      });
+    }
+
+    // 1-2 distant black holes with accretion rings
+    for (let i = 0; i < 2; i++) {
+      const r = 950 + Math.random() * 400;
+      const ang = Math.random() * Math.PI * 2;
+      blackHoles.push({
+        x: Math.cos(ang) * r,
+        y: Math.sin(ang) * r,
+        radius: 14 + Math.random() * 10,
+        rot: Math.random() * Math.PI * 2,
+        spinSpeed: 0.3 + Math.random() * 0.4,
+      });
+    }
+
+    // long-period comets on elliptical orbits
+    const cometTints = ['#b5d7ff', '#ffd1b5', '#c9b5ff', '#b5ffea'];
+    for (let i = 0; i < 5; i++) {
+      comets.push({
+        orbitCx: (Math.random() - 0.5) * 200,
+        orbitCy: (Math.random() - 0.5) * 200,
+        a: 650 + Math.random() * 450,
+        b: 280 + Math.random() * 220,
+        theta: Math.random() * Math.PI * 2,
+        speed: 0.04 + Math.random() * 0.06,
+        tilt: Math.random() * Math.PI * 2,
+        tint: cometTints[i % cometTints.length],
       });
     }
 
@@ -1076,7 +1156,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         }
       }
 
-      // ===== haze layer (multi-pass for thick, billowy feel) =====
+      // ===== haze layer (subtle wisps) =====
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
       for (const bg of bgOrder) {
@@ -1084,54 +1164,32 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         if (!st || st.a < 0.01) continue;
         const color = bgColors[bg];
         const radius = st.r * hazePulse;
+        const aa = st.a * 0.35; // heavy tone down
 
-        // soft outer bloom (huge, diffuse)
-        const bloom = ctx.createRadialGradient(st.x, st.y, 0, st.x, st.y, radius * 1.55);
-        bloom.addColorStop(0, hexToRgba(color, 0.22 * st.a));
-        bloom.addColorStop(0.4, hexToRgba(color, 0.12 * st.a));
-        bloom.addColorStop(1, hexToRgba(color, 0));
-        ctx.fillStyle = bloom;
-        ctx.beginPath();
-        ctx.arc(st.x, st.y, radius * 1.55, 0, Math.PI * 2);
-        ctx.fill();
-
-        // thick body
+        // soft body
         const body = ctx.createRadialGradient(st.x, st.y, 0, st.x, st.y, radius);
-        body.addColorStop(0, hexToRgba(color, 0.55 * st.a));
-        body.addColorStop(0.35, hexToRgba(color, 0.28 * st.a));
-        body.addColorStop(0.7, hexToRgba(color, 0.1 * st.a));
+        body.addColorStop(0, hexToRgba(color, 0.16 * aa));
+        body.addColorStop(0.5, hexToRgba(color, 0.07 * aa));
         body.addColorStop(1, hexToRgba(color, 0));
         ctx.fillStyle = body;
         ctx.beginPath();
         ctx.arc(st.x, st.y, radius, 0, Math.PI * 2);
         ctx.fill();
 
-        // wispy tendrils: 5 offset lobes drifting with time for a billowy shape
-        const lobes = 5;
-        for (let i = 0; i < lobes; i++) {
-          const theta = (i / lobes) * Math.PI * 2 + tSec * 0.15 + (bg.length * 0.6);
-          const wobble = 0.55 + 0.15 * Math.sin(tSec * 0.7 + i * 1.3);
-          const lx = st.x + Math.cos(theta) * radius * 0.4 * wobble;
-          const ly = st.y + Math.sin(theta) * radius * 0.4 * wobble;
-          const lr = radius * (0.55 + 0.12 * Math.sin(tSec * 0.5 + i));
+        // faint tendrils (3 only)
+        for (let i = 0; i < 3; i++) {
+          const theta = (i / 3) * Math.PI * 2 + tSec * 0.1 + bg.length * 0.6;
+          const lx = st.x + Math.cos(theta) * radius * 0.32;
+          const ly = st.y + Math.sin(theta) * radius * 0.32;
+          const lr = radius * 0.5;
           const lobe = ctx.createRadialGradient(lx, ly, 0, lx, ly, lr);
-          lobe.addColorStop(0, hexToRgba(color, 0.18 * st.a));
-          lobe.addColorStop(0.5, hexToRgba(color, 0.07 * st.a));
+          lobe.addColorStop(0, hexToRgba(color, 0.06 * aa));
           lobe.addColorStop(1, hexToRgba(color, 0));
           ctx.fillStyle = lobe;
           ctx.beginPath();
           ctx.arc(lx, ly, lr, 0, Math.PI * 2);
           ctx.fill();
         }
-
-        // bright core
-        const core = ctx.createRadialGradient(st.x, st.y, 0, st.x, st.y, radius * 0.35);
-        core.addColorStop(0, hexToRgba(color, 0.38 * st.a));
-        core.addColorStop(1, hexToRgba(color, 0));
-        ctx.fillStyle = core;
-        ctx.beginPath();
-        ctx.arc(st.x, st.y, radius * 0.35, 0, Math.PI * 2);
-        ctx.fill();
       }
       ctx.restore();
 
@@ -1153,10 +1211,13 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       ctx.restore();
 
       // ===== galaxies =====
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
       for (const gx of galaxies) {
         ctx.save();
         ctx.translate(gx.x, gx.y);
-        ctx.rotate(gx.rot);
+        ctx.rotate(gx.rot + tSec * 0.015);
+        // disc glow
         const gg = ctx.createRadialGradient(0, 0, 0, 0, 0, gx.rx);
         gg.addColorStop(0, hexToRgba(gx.tint, gx.alpha * 2.2));
         gg.addColorStop(0.5, hexToRgba(gx.tint, gx.alpha * 0.8));
@@ -1165,12 +1226,154 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         ctx.beginPath();
         ctx.ellipse(0, 0, gx.rx, gx.ry, 0, 0, Math.PI * 2);
         ctx.fill();
-        ctx.fillStyle = hexToRgba('#ffffff', gx.alpha * 2.5);
+
+        if (gx.spiral) {
+          // spiral arms as point clouds
+          for (let arm = 0; arm < gx.armCount; arm++) {
+            const armOffset = (arm / gx.armCount) * Math.PI * 2;
+            for (let p = 0; p < 44; p++) {
+              const t = p / 44;
+              const radius = t * gx.rx;
+              const twist = armOffset + t * 4.2;
+              const jitter = (Math.random() - 0.5) * 6;
+              const px = Math.cos(twist) * radius + jitter;
+              const py = Math.sin(twist) * radius * (gx.ry / gx.rx) + jitter;
+              const a = gx.alpha * (1 - t) * 3;
+              ctx.fillStyle = hexToRgba(gx.tint, a);
+              ctx.beginPath();
+              ctx.arc(px, py, 0.9, 0, Math.PI * 2);
+              ctx.fill();
+            }
+          }
+        }
+
+        // bright core
+        ctx.fillStyle = hexToRgba('#ffffff', gx.alpha * 3);
         ctx.beginPath();
-        ctx.ellipse(0, 0, gx.rx * 0.18, gx.ry * 0.18, 0, 0, Math.PI * 2);
+        ctx.ellipse(0, 0, gx.rx * 0.14, Math.max(gx.ry, gx.rx) * 0.14, 0, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
       }
+      ctx.restore();
+
+      // ===== planets =====
+      ctx.save();
+      for (const p of planets) {
+        // soft glow halo
+        const halo = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.radius * 3);
+        halo.addColorStop(0, hexToRgba(p.tint, 0.28 * p.glow));
+        halo.addColorStop(1, hexToRgba(p.tint, 0));
+        ctx.fillStyle = halo;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.radius * 3, 0, Math.PI * 2);
+        ctx.fill();
+
+        // planet body with shaded gradient
+        const body = ctx.createRadialGradient(
+          p.x - p.radius * 0.4,
+          p.y - p.radius * 0.4,
+          0,
+          p.x,
+          p.y,
+          p.radius
+        );
+        body.addColorStop(0, hexToRgba(p.tint, 0.95));
+        body.addColorStop(0.7, hexToRgba(p.tint, 0.6));
+        body.addColorStop(1, hexToRgba(p.tint, 0.2));
+        ctx.fillStyle = body;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        if (p.ring) {
+          ctx.save();
+          ctx.translate(p.x, p.y);
+          ctx.rotate(p.ringTilt);
+          ctx.strokeStyle = hexToRgba(p.ringTint, 0.55);
+          ctx.lineWidth = 0.8 / currentTransform.k;
+          ctx.beginPath();
+          ctx.ellipse(0, 0, p.radius * 2.2, p.radius * 0.7, 0, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.strokeStyle = hexToRgba(p.ringTint, 0.3);
+          ctx.beginPath();
+          ctx.ellipse(0, 0, p.radius * 2.6, p.radius * 0.82, 0, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.restore();
+        }
+      }
+      ctx.restore();
+
+      // ===== black holes =====
+      ctx.save();
+      for (const bh of blackHoles) {
+        const spin = bh.rot + tSec * bh.spinSpeed;
+        // accretion disk glow
+        ctx.globalCompositeOperation = 'lighter';
+        for (let ring = 0; ring < 3; ring++) {
+          const rr = bh.radius * (1.8 + ring * 0.4);
+          const gg = ctx.createRadialGradient(bh.x, bh.y, bh.radius * 0.8, bh.x, bh.y, rr);
+          gg.addColorStop(0, 'rgba(255,180,80,0.55)');
+          gg.addColorStop(0.6, 'rgba(220,120,200,0.25)');
+          gg.addColorStop(1, 'rgba(160,100,220,0)');
+          ctx.save();
+          ctx.translate(bh.x, bh.y);
+          ctx.rotate(spin + ring * 0.8);
+          ctx.fillStyle = gg;
+          ctx.beginPath();
+          ctx.ellipse(0, 0, rr, rr * 0.4, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+        // event horizon (dark)
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.fillStyle = '#000';
+        ctx.beginPath();
+        ctx.arc(bh.x, bh.y, bh.radius, 0, Math.PI * 2);
+        ctx.fill();
+        // rim
+        ctx.strokeStyle = 'rgba(255,200,120,0.5)';
+        ctx.lineWidth = 0.8 / currentTransform.k;
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // ===== comets =====
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      for (const c of comets) {
+        c.theta += c.speed * 0.016;
+        const cs = Math.cos(c.tilt);
+        const sn = Math.sin(c.tilt);
+        const ox = Math.cos(c.theta) * c.a;
+        const oy = Math.sin(c.theta) * c.b;
+        const cx = c.orbitCx + ox * cs - oy * sn;
+        const cy = c.orbitCy + ox * sn + oy * cs;
+        // tail direction: tangent
+        const tx = -Math.sin(c.theta) * c.a * cs - Math.cos(c.theta) * c.b * sn;
+        const ty = -Math.sin(c.theta) * c.a * sn + Math.cos(c.theta) * c.b * cs;
+        const len = Math.hypot(tx, ty) || 1;
+        const ux = tx / len;
+        const uy = ty / len;
+        const tailLen = 55;
+        const bx = cx - ux * tailLen;
+        const by = cy - uy * tailLen;
+        const grad = ctx.createLinearGradient(bx, by, cx, cy);
+        grad.addColorStop(0, hexToRgba(c.tint, 0));
+        grad.addColorStop(1, hexToRgba(c.tint, 0.75));
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = 1.4 / currentTransform.k;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(bx, by);
+        ctx.lineTo(cx, cy);
+        ctx.stroke();
+        // head
+        ctx.fillStyle = hexToRgba(c.tint, 0.95);
+        ctx.beginPath();
+        ctx.arc(cx, cy, 1.4 / Math.max(currentTransform.k, 0.5), 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
 
       // ===== dust motes =====
       ctx.save();
