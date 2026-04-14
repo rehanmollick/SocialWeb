@@ -1033,8 +1033,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
 
       const tSec = (now - startTime) / 1000;
       const hazePulse = 1 + 0.06 * Math.sin(tSec * 0.8);
-      const lerp = 0.09;
-      const shrinkLerp = 0.055;
+      const lerp = 0.14;
+      const shrinkLerp = 0.05;
       for (const bg of bgOrder) {
         const live = liveClusters[bg];
         const seed = bgCenters[bg];
@@ -1045,9 +1045,10 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         if (live.n >= 2) {
           const spread = Math.sqrt(live.maxD2);
           // density = tight clusters fire bright, spread ones fade
-          const compactness = live.n / (1 + spread / 70);
-          const targetR = Math.max(90, spread * 1.4 + 60);
-          const targetA = Math.min(0.95, compactness * 0.18);
+          // more sensitive: wider spread tolerance + higher base lift
+          const compactness = (live.n + 0.8) / (1 + spread / 130);
+          const targetR = Math.max(90, spread * 1.4 + 70);
+          const targetA = Math.min(0.95, compactness * 0.32);
           const radiusLerp = targetR > st.r ? lerp : shrinkLerp;
           const alphaLerp = targetA > st.a ? lerp : shrinkLerp;
           st.x += (live.cx - st.x) * lerp;
