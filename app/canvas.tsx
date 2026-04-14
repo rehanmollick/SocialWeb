@@ -385,30 +385,55 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       .velocityDecay(0.72);
     sim.stop();
 
-    // lay out ONE bucket's nodes into concentric rings around its center.
+    // lay out ONE bucket's nodes as regular polygons around its center.
+    // for n<=8, single n-gon ring. For larger, center + rings of 6/12/18.
     // only touches unpinned nodes. x/y only set if unset (first placement).
     const layoutBucket = (bg: string, bucket: SimNode[]) => {
       const c = bgCenters[bg] ?? bgCenters.online;
       const unpinned = bucket.filter((n) => !n._pinned);
       unpinned.sort((a, b) => b.s - a.s || a.name.localeCompare(b.name));
-      const ringStep = 5;
-      let index = 0;
-      for (let ring = 0; index < unpinned.length; ring++) {
-        const capacity = ring === 0 ? 1 : 6 * ring;
-        const radius = ring === 0 ? 0 : ring * 38;
-        const take = Math.min(capacity, unpinned.length - index);
-        for (let i = 0; i < take; i++) {
-          const theta = (i / take) * Math.PI * 2 + (ring % 2) * (Math.PI / ringStep);
-          const n = unpinned[index++];
-          const ax = c.x + Math.cos(theta) * radius;
-          const ay = c.y + Math.sin(theta) * radius;
-          n._ax = ax;
-          n._ay = ay;
-          if (n.x == null || n.y == null) {
-            n.x = ax;
-            n.y = ay;
-          }
+      const total = unpinned.length;
+      if (total === 0) return;
+      // orient each bucket so the "top" vertex is always up in its local frame
+      const orient = -Math.PI / 2;
+      const place = (node: SimNode, theta: number, radius: number) => {
+        const ax = c.x + Math.cos(theta) * radius;
+        const ay = c.y + Math.sin(theta) * radius;
+        node._ax = ax;
+        node._ay = ay;
+        if (node.x == null || node.y == null) {
+          node.x = ax;
+          node.y = ay;
         }
+      };
+      if (total === 1) {
+        place(unpinned[0], 0, 0);
+        return;
+      }
+      if (total >= 2 && total <= 8) {
+        // single regular polygon
+        const radius = 22 + total * 6;
+        for (let i = 0; i < total; i++) {
+          const theta = orient + (i / total) * Math.PI * 2;
+          place(unpinned[i], theta, radius);
+        }
+        return;
+      }
+      // larger: 1 center + concentric polygons of 7, 13, 19...
+      let index = 0;
+      place(unpinned[index++], 0, 0);
+      const ringSizes = [7, 13, 19, 25];
+      let ring = 0;
+      while (index < total) {
+        const cap = ringSizes[ring] ?? ringSizes[ringSizes.length - 1];
+        const take = Math.min(cap, total - index);
+        const radius = (ring + 1) * 44;
+        const twist = ring % 2 === 0 ? 0 : Math.PI / cap;
+        for (let i = 0; i < take; i++) {
+          const theta = orient + twist + (i / take) * Math.PI * 2;
+          place(unpinned[index++], theta, radius);
+        }
+        ring++;
       }
     };
 
@@ -1240,45 +1265,81 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           const pulse = 0.75 + 0.25 * Math.sin(tSec * 2.0 + (n._starPhase || 0));
           const pulseSlow = 0.85 + 0.15 * Math.sin(tSec * 0.7 + (n._starPhase || 0));
           const traitTagsForTint = tags.filter((t) => t !== 'highagency' && t in tagColors);
-          const traitTint = traitTagsForTint.length > 0 ? tagColors[traitTagsForTint[0]] : '#ffe8b0';
+          const palette = traitTagsForTint.length > 0
+            ? traitTagsForTint.map((t) => tagColors[t])
+            : ['#ffe8b0'];
           ctx.save();
           ctx.globalCompositeOperation = 'lighter';
           const wideR = r * 11 * pulseSlow;
-          const wide = ctx.createRadialGradient(x, y, 0, x, y, wideR);
-          wide.addColorStop(0, hexToRgba(traitTint, 0.22));
-          wide.addColorStop(0.18, hexToRgba(traitTint, 0.14));
-          wide.addColorStop(0.5, hexToRgba(traitTint, 0.05));
-          wide.addColorStop(1, hexToRgba(traitTint, 0));
-          ctx.fillStyle = wide;
-          ctx.beginPath();
-          ctx.arc(x, y, wideR, 0, Math.PI * 2);
-          ctx.fill();
+          // each trait contributes its own tinted halo offset slightly — reads as multicolor bloom
+          for (let pi = 0; pi < palette.length; pi++) {
+            const tint = palette[pi];
+            const ang = (pi / palette.length) * Math.PI * 2 + tSec * 0.25;
+            const off = palette.length > 1 ? r * 1.1 : 0;
+            const cx = x + Math.cos(ang) * off;
+            const cy = y + Math.sin(ang) * off;
+            const wide = ctx.createRadialGradient(cx, cy, 0, cx, cy, wideR);
+            const aMul = 1 / Math.sqrt(palette.length);
+            wide.addColorStop(0, hexToRgba(tint, 0.22 * aMul));
+            wide.addColorStop(0.18, hexToRgba(tint, 0.14 * aMul));
+            wide.addColorStop(0.5, hexToRgba(tint, 0.05 * aMul));
+            wide.addColorStop(1, hexToRgba(tint, 0));
+            ctx.fillStyle = wide;
+            ctx.beginPath();
+            ctx.arc(cx, cy, wideR, 0, Math.PI * 2);
+            ctx.fill();
+          }
           const midR = r * 5.5 * pulse;
-          const mid = ctx.createRadialGradient(x, y, 0, x, y, midR);
-          mid.addColorStop(0, 'rgba(255,255,255,0.9)');
-          mid.addColorStop(0.15, hexToRgba(traitTint, 0.7));
-          mid.addColorStop(0.4, hexToRgba(traitTint, 0.22));
-          mid.addColorStop(1, hexToRgba(traitTint, 0));
-          ctx.fillStyle = mid;
-          ctx.beginPath();
-          ctx.arc(x, y, midR, 0, Math.PI * 2);
-          ctx.fill();
+          // pie-slice mid glow — each trait owns its wedge
+          if (palette.length === 1) {
+            const mid = ctx.createRadialGradient(x, y, 0, x, y, midR);
+            mid.addColorStop(0, 'rgba(255,255,255,0.9)');
+            mid.addColorStop(0.15, hexToRgba(palette[0], 0.7));
+            mid.addColorStop(0.4, hexToRgba(palette[0], 0.22));
+            mid.addColorStop(1, hexToRgba(palette[0], 0));
+            ctx.fillStyle = mid;
+            ctx.beginPath();
+            ctx.arc(x, y, midR, 0, Math.PI * 2);
+            ctx.fill();
+          } else {
+            const step = (Math.PI * 2) / palette.length;
+            const rot = tSec * 0.18 + (n._starPhase || 0);
+            for (let pi = 0; pi < palette.length; pi++) {
+              const tint = palette[pi];
+              const a0 = rot + pi * step;
+              const a1 = a0 + step;
+              const mid = ctx.createRadialGradient(x, y, 0, x, y, midR);
+              mid.addColorStop(0, 'rgba(255,255,255,0.85)');
+              mid.addColorStop(0.15, hexToRgba(tint, 0.75));
+              mid.addColorStop(0.45, hexToRgba(tint, 0.28));
+              mid.addColorStop(1, hexToRgba(tint, 0));
+              ctx.fillStyle = mid;
+              ctx.beginPath();
+              ctx.moveTo(x, y);
+              ctx.arc(x, y, midR, a0, a1);
+              ctx.closePath();
+              ctx.fill();
+            }
+          }
           const spikeLen = r * 9 * pulse;
           const spikeW = 0.8 / currentTransform.k;
-          const spikeGrad = (x1: number, y1: number, x2: number, y2: number) => {
+          // each spike gets a different trait color when multi-tag
+          const spikeTint = (i: number) => palette[i % palette.length];
+          const spikeGrad = (x1: number, y1: number, x2: number, y2: number, i: number) => {
             const g = ctx.createLinearGradient(x1, y1, x2, y2);
-            g.addColorStop(0, hexToRgba(traitTint, 0));
-            g.addColorStop(0.5, hexToRgba(traitTint, 0.9));
-            g.addColorStop(1, hexToRgba(traitTint, 0));
+            const tint = spikeTint(i);
+            g.addColorStop(0, hexToRgba(tint, 0));
+            g.addColorStop(0.5, hexToRgba(tint, 0.9));
+            g.addColorStop(1, hexToRgba(tint, 0));
             return g;
           };
           ctx.lineWidth = spikeW;
-          ctx.strokeStyle = spikeGrad(x - spikeLen, y, x + spikeLen, y);
+          ctx.strokeStyle = spikeGrad(x - spikeLen, y, x + spikeLen, y, 0);
           ctx.beginPath();
           ctx.moveTo(x - spikeLen, y);
           ctx.lineTo(x + spikeLen, y);
           ctx.stroke();
-          ctx.strokeStyle = spikeGrad(x, y - spikeLen, x, y + spikeLen);
+          ctx.strokeStyle = spikeGrad(x, y - spikeLen, x, y + spikeLen, 1);
           ctx.beginPath();
           ctx.moveTo(x, y - spikeLen);
           ctx.lineTo(x, y + spikeLen);
@@ -1286,12 +1347,12 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           const diagLen = spikeLen * 0.6;
           const dOff = diagLen / Math.sqrt(2);
           ctx.lineWidth = spikeW * 0.7;
-          ctx.strokeStyle = spikeGrad(x - dOff, y - dOff, x + dOff, y + dOff);
+          ctx.strokeStyle = spikeGrad(x - dOff, y - dOff, x + dOff, y + dOff, 2);
           ctx.beginPath();
           ctx.moveTo(x - dOff, y - dOff);
           ctx.lineTo(x + dOff, y + dOff);
           ctx.stroke();
-          ctx.strokeStyle = spikeGrad(x - dOff, y + dOff, x + dOff, y - dOff);
+          ctx.strokeStyle = spikeGrad(x - dOff, y + dOff, x + dOff, y - dOff, 3);
           ctx.beginPath();
           ctx.moveTo(x - dOff, y + dOff);
           ctx.lineTo(x + dOff, y - dOff);
@@ -1334,11 +1395,12 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           }
           ctx.restore();
           const coreR = r * 1.1;
+          const coreTint = palette[0];
           const core = ctx.createRadialGradient(x, y, 0, x, y, coreR);
           core.addColorStop(0, '#ffffff');
           core.addColorStop(0.4, '#ffffff');
-          core.addColorStop(0.75, hexToRgba(traitTint, 0.95));
-          core.addColorStop(1, hexToRgba(traitTint, 0.6));
+          core.addColorStop(0.75, hexToRgba(coreTint, 0.95));
+          core.addColorStop(1, hexToRgba(coreTint, 0.6));
           ctx.fillStyle = core;
           ctx.beginPath();
           ctx.arc(x, y, coreR, 0, Math.PI * 2);
@@ -1400,7 +1462,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           ctx.strokeText(firstName, x, ly);
           ctx.fillStyle = hexToRgba(labelTint, 0.98);
           ctx.fillText(firstName, x, ly);
-        } else if (n.s >= 4) {
+        } else {
           const fs = 10 / currentTransform.k;
           const ly = y - r - 6 / currentTransform.k;
           ctx.font = `500 ${fs}px Inter, sans-serif`;
@@ -1409,7 +1471,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           ctx.lineWidth = 2.5 / currentTransform.k;
           ctx.strokeStyle = 'rgba(0,0,0,0.8)';
           ctx.strokeText(firstName, x, ly);
-          ctx.fillStyle = 'rgba(210,210,215,0.9)';
+          const alpha = n.s === 0 ? 0.7 : Math.min(0.95, 0.55 + n.s * 0.045);
+          ctx.fillStyle = `rgba(210,210,215,${alpha})`;
           ctx.fillText(firstName, x, ly);
         }
       }

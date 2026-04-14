@@ -328,6 +328,17 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
           </div>
         </div>
 
+        <div className="controls-hud">
+          <span className="title">controls</span>
+          <div className="crow"><kbd>click</kbd><span>select dot</span></div>
+          <div className="crow"><kbd>drag</kbd><span>move dot</span></div>
+          <div className="crow"><kbd>⇧</kbd>+<kbd>drag</kbd><span>connect 2 dots</span></div>
+          <div className="crow"><kbd>⌥</kbd>+<kbd>click</kbd><span>new dot</span></div>
+          <div className="crow"><kbd>⌘</kbd>+<kbd>drag</kbd><span>box select</span></div>
+          <div className="crow"><kbd>wheel</kbd>/<kbd>pinch</kbd><span>zoom</span></div>
+          <div className="crow"><kbd>click</kbd><span>haze → name cluster</span></div>
+        </div>
+
         {clusterNamePopup && (
           <div
             className="cluster-name-popup"
