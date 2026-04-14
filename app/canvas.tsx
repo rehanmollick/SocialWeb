@@ -681,6 +681,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           ex.s = n.strength;
           ex.tags = tags;
           ex.description = n.description;
+          ex.pinToMe = n.pinToMe;
           ex.primary = primaryTagOf(tags);
         } else {
           const c = bgCenters[n.bg in bgCenters ? n.bg : 'online'];
