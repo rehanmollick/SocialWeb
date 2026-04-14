@@ -410,18 +410,18 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     }
 
     const galaxyTints = ['#c9b5ff', '#b5d7ff', '#ffd1b5', '#b5ffea', '#ffb5d7', '#d7ffb5'];
-    for (let i = 0; i < 36; i++) {
-      // first half mid-distance, second half pushed way out
-      const r = i < 18 ? 700 + Math.random() * 900 : 1700 + Math.random() * 1500;
+    for (let i = 0; i < 28; i++) {
+      // all pushed to mid-far range so the center stays clear
+      const r = i < 14 ? 1500 + Math.random() * 700 : 2200 + Math.random() * 1500;
       const ang = Math.random() * Math.PI * 2;
-      const spiral = Math.random() > 0.45 ? 1 : 0;
+      const spiral = Math.random() > 0.3 ? 1 : 0;
       galaxies.push({
         x: Math.cos(ang) * r,
         y: Math.sin(ang) * r,
-        rx: 32 + Math.random() * 70,
-        ry: spiral ? 32 + Math.random() * 70 : 12 + Math.random() * 22,
+        rx: 60 + Math.random() * 100,
+        ry: spiral ? 60 + Math.random() * 100 : 22 + Math.random() * 32,
         rot: Math.random() * Math.PI,
-        alpha: 0.06 + Math.random() * 0.08,
+        alpha: 0.09 + Math.random() * 0.1,
         tint: galaxyTints[i % galaxyTints.length],
         spiral,
         armCount: 2 + Math.floor(Math.random() * 3),
@@ -449,8 +449,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     // small background galaxies — clearly galaxy-shaped
     const miniTints = ['#c9b5ff', '#b5d7ff', '#ffd1b5', '#b5ffea', '#ffb5e6', '#e6d4ff'];
     const miniKinds: MiniGalaxy['kind'][] = ['spiral', 'spiral', 'barred', 'elliptical'];
-    for (let i = 0; i < 70; i++) {
-      const r = 600 + Math.random() * 2800;
+    for (let i = 0; i < 55; i++) {
+      const r = 1300 + Math.random() * 2200;
       const ang = Math.random() * Math.PI * 2;
       miniGalaxies.push({
         x: Math.cos(ang) * r,
@@ -1363,10 +1363,23 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         ctx.save();
         ctx.translate(gx.x, gx.y);
         ctx.rotate(gx.rot + tSec * 0.015);
-        // disc glow
+        const ratio = gx.ry / gx.rx;
+
+        // outer halo
+        const halo = ctx.createRadialGradient(0, 0, 0, 0, 0, gx.rx * 1.9);
+        halo.addColorStop(0, hexToRgba(gx.tint, gx.alpha * 0.55));
+        halo.addColorStop(0.45, hexToRgba(gx.tint, gx.alpha * 0.18));
+        halo.addColorStop(1, hexToRgba(gx.tint, 0));
+        ctx.fillStyle = halo;
+        ctx.beginPath();
+        ctx.ellipse(0, 0, gx.rx * 1.9, gx.ry * 1.9, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // disc glow base — warm interior shading to cool outer
         const gg = ctx.createRadialGradient(0, 0, 0, 0, 0, gx.rx);
-        gg.addColorStop(0, hexToRgba(gx.tint, gx.alpha * 1.2));
-        gg.addColorStop(0.5, hexToRgba(gx.tint, gx.alpha * 0.4));
+        gg.addColorStop(0, hexToRgba('#fff4d6', gx.alpha * 1.8));
+        gg.addColorStop(0.22, hexToRgba('#ffd9a8', gx.alpha * 1.1));
+        gg.addColorStop(0.55, hexToRgba(gx.tint, gx.alpha * 0.55));
         gg.addColorStop(1, hexToRgba(gx.tint, 0));
         ctx.fillStyle = gg;
         ctx.beginPath();
@@ -1374,30 +1387,78 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         ctx.fill();
 
         if (gx.spiral) {
-          // spiral arms as point clouds
+          // dense, color-graded spiral arm point clouds
+          const armPoints = 260;
           for (let arm = 0; arm < gx.armCount; arm++) {
             const armOffset = (arm / gx.armCount) * Math.PI * 2;
-            for (let p = 0; p < 44; p++) {
-              const t = p / 44;
-              const radius = t * gx.rx;
-              const twist = armOffset + t * 4.2;
-              const jitter = (Math.random() - 0.5) * 6;
-              const px = Math.cos(twist) * radius + jitter;
-              const py = Math.sin(twist) * radius * (gx.ry / gx.rx) + jitter;
-              const a = gx.alpha * (1 - t) * 1.5;
-              ctx.fillStyle = hexToRgba(gx.tint, a);
+            for (let p = 0; p < armPoints; p++) {
+              const t = p / armPoints;
+              const radius = Math.pow(t, 0.72) * gx.rx;
+              const twist = armOffset + t * 6.8;
+              const armWidth = (1 - t * 0.4) * gx.rx * 0.085;
+              const perp = (Math.random() - 0.5) * armWidth * 2;
+              const cx = Math.cos(twist) * radius;
+              const cy = Math.sin(twist) * radius;
+              const px = cx + Math.cos(twist + Math.PI / 2) * perp;
+              const py = (cy + Math.sin(twist + Math.PI / 2) * perp) * ratio;
+              const armTint = t > 0.55 ? '#cfe2ff' : t > 0.3 ? '#e8f0ff' : '#ffe6b8';
+              const a = gx.alpha * (1 - t * 0.55) * 1.5;
+              ctx.fillStyle = hexToRgba(armTint, a);
+              const sz = 0.55 + (1 - t) * 0.85;
               ctx.beginPath();
-              ctx.arc(px, py, 0.9, 0, Math.PI * 2);
+              ctx.arc(px, py, sz, 0, Math.PI * 2);
+              ctx.fill();
+            }
+            // HII regions — pink star-forming nebulae scattered along the arm
+            const hiiCount = Math.max(4, Math.floor(gx.rx / 22));
+            for (let h = 0; h < hiiCount; h++) {
+              const t = 0.22 + Math.random() * 0.7;
+              const radius = Math.pow(t, 0.72) * gx.rx;
+              const twist = armOffset + t * 6.8 + (Math.random() - 0.5) * 0.35;
+              const px = Math.cos(twist) * radius;
+              const py = Math.sin(twist) * radius * ratio;
+              const hr = gx.rx * (0.05 + Math.random() * 0.04);
+              const hii = ctx.createRadialGradient(px, py, 0, px, py, hr);
+              const hueSwap = Math.random() > 0.5 ? '#ff9ec8' : '#9ec8ff';
+              hii.addColorStop(0, hexToRgba(hueSwap, gx.alpha * 2.2));
+              hii.addColorStop(0.5, hexToRgba(hueSwap, gx.alpha * 0.6));
+              hii.addColorStop(1, hexToRgba(hueSwap, 0));
+              ctx.fillStyle = hii;
+              ctx.beginPath();
+              ctx.arc(px, py, hr, 0, Math.PI * 2);
               ctx.fill();
             }
           }
+        } else {
+          // elliptical galaxy: dense star cloud, no arms
+          for (let p = 0; p < 320; p++) {
+            const t = Math.pow(Math.random(), 1.4);
+            const ang = Math.random() * Math.PI * 2;
+            const px = Math.cos(ang) * t * gx.rx;
+            const py = Math.sin(ang) * t * gx.ry;
+            ctx.fillStyle = hexToRgba('#ffe6b8', gx.alpha * (1 - t) * 1.4);
+            ctx.beginPath();
+            ctx.arc(px, py, 0.7, 0, Math.PI * 2);
+            ctx.fill();
+          }
         }
 
-        // bright core
-        ctx.fillStyle = hexToRgba('#ffffff', gx.alpha * 1.6);
+        // bright bloomy core
+        const core = ctx.createRadialGradient(0, 0, 0, 0, 0, gx.rx * 0.32);
+        core.addColorStop(0, hexToRgba('#ffffff', Math.min(0.95, gx.alpha * 4)));
+        core.addColorStop(0.3, hexToRgba('#fff0cc', gx.alpha * 1.8));
+        core.addColorStop(1, hexToRgba(gx.tint, 0));
+        ctx.fillStyle = core;
         ctx.beginPath();
-        ctx.ellipse(0, 0, gx.rx * 0.14, Math.max(gx.ry, gx.rx) * 0.14, 0, 0, Math.PI * 2);
+        ctx.arc(0, 0, gx.rx * 0.32, 0, Math.PI * 2);
         ctx.fill();
+
+        // tiny pinprick nucleus
+        ctx.fillStyle = `rgba(255,255,255,${Math.min(1, gx.alpha * 6)})`;
+        ctx.beginPath();
+        ctx.arc(0, 0, Math.max(1.2, gx.rx * 0.04), 0, Math.PI * 2);
+        ctx.fill();
+
         ctx.restore();
       }
       ctx.restore();
@@ -1421,49 +1482,83 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         ctx.fill();
 
         if (mg.kind === 'elliptical') {
+          // dense star cloud
+          for (let p = 0; p < 110; p++) {
+            const t = Math.pow(Math.random(), 1.4);
+            const ang = Math.random() * Math.PI * 2;
+            const px = Math.cos(ang) * t * mg.size;
+            const py = Math.sin(ang) * t * mg.size * 0.72;
+            ctx.fillStyle = hexToRgba('#ffe6b8', (1 - t) * 0.45);
+            ctx.beginPath();
+            ctx.arc(px, py, 0.55, 0, Math.PI * 2);
+            ctx.fill();
+          }
           const g = ctx.createRadialGradient(0, 0, 0, 0, 0, mg.size);
-          g.addColorStop(0, hexToRgba(mg.tint, 0.42));
-          g.addColorStop(0.4, hexToRgba(mg.tint, 0.18));
+          g.addColorStop(0, hexToRgba('#fff0cc', 0.55));
+          g.addColorStop(0.4, hexToRgba(mg.tint, 0.2));
           g.addColorStop(1, hexToRgba(mg.tint, 0));
           ctx.fillStyle = g;
           ctx.beginPath();
           ctx.ellipse(0, 0, mg.size, mg.size * 0.72, 0, 0, Math.PI * 2);
           ctx.fill();
         } else {
-          // spiral arms as dense point clouds
-          const steps = 60;
+          // dense, color-graded spiral arms
+          const steps = 110;
           for (let arm = 0; arm < mg.arms; arm++) {
             const armOffset = (arm / mg.arms) * Math.PI * 2;
             for (let p = 0; p < steps; p++) {
               const t = p / steps;
-              const radius = t * mg.size;
+              const radius = Math.pow(t, 0.75) * mg.size;
               const twist = armOffset + t * mg.tightness;
-              const jitter = (Math.random() - 0.5) * mg.size * 0.08;
-              const px = Math.cos(twist) * radius + jitter;
-              const py = Math.sin(twist) * radius + jitter;
-              const a = (1 - t) * 0.35;
-              ctx.fillStyle = hexToRgba(mg.tint, a);
+              const armWidth = (1 - t * 0.4) * mg.size * 0.09;
+              const perp = (Math.random() - 0.5) * armWidth * 2;
+              const px = Math.cos(twist) * radius + Math.cos(twist + Math.PI / 2) * perp;
+              const py = Math.sin(twist) * radius + Math.sin(twist + Math.PI / 2) * perp;
+              const armTint = t > 0.55 ? '#cfe2ff' : t > 0.3 ? '#e8f0ff' : '#ffe6b8';
+              const a = (1 - t * 0.5) * 0.5;
+              ctx.fillStyle = hexToRgba(armTint, a);
               ctx.beginPath();
-              ctx.arc(px, py, 0.6, 0, Math.PI * 2);
+              ctx.arc(px, py, 0.55, 0, Math.PI * 2);
+              ctx.fill();
+            }
+            // a couple HII glow spots
+            for (let h = 0; h < 3; h++) {
+              const t = 0.3 + Math.random() * 0.6;
+              const radius = Math.pow(t, 0.75) * mg.size;
+              const twist = armOffset + t * mg.tightness + (Math.random() - 0.5) * 0.4;
+              const px = Math.cos(twist) * radius;
+              const py = Math.sin(twist) * radius;
+              const hr = mg.size * 0.13;
+              const hii = ctx.createRadialGradient(px, py, 0, px, py, hr);
+              const tint = Math.random() > 0.5 ? '#ff9ec8' : '#9ec8ff';
+              hii.addColorStop(0, hexToRgba(tint, 0.55));
+              hii.addColorStop(1, hexToRgba(tint, 0));
+              ctx.fillStyle = hii;
+              ctx.beginPath();
+              ctx.arc(px, py, hr, 0, Math.PI * 2);
               ctx.fill();
             }
           }
           if (mg.kind === 'barred') {
-            // central bar
-            ctx.fillStyle = hexToRgba(mg.tint, 0.32);
+            ctx.fillStyle = hexToRgba('#ffd9a8', 0.4);
             ctx.beginPath();
             ctx.ellipse(0, 0, mg.size * 0.5, mg.size * 0.12, 0, 0, Math.PI * 2);
             ctx.fill();
           }
         }
 
-        // bright nucleus
-        const core = ctx.createRadialGradient(0, 0, 0, 0, 0, mg.size * 0.2);
-        core.addColorStop(0, 'rgba(255,255,255,0.55)');
+        // bloomy nucleus
+        const core = ctx.createRadialGradient(0, 0, 0, 0, 0, mg.size * 0.28);
+        core.addColorStop(0, 'rgba(255,255,255,0.85)');
+        core.addColorStop(0.35, 'rgba(255,236,200,0.45)');
         core.addColorStop(1, hexToRgba(mg.tint, 0));
         ctx.fillStyle = core;
         ctx.beginPath();
-        ctx.arc(0, 0, mg.size * 0.2, 0, Math.PI * 2);
+        ctx.arc(0, 0, mg.size * 0.28, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,0.95)';
+        ctx.beginPath();
+        ctx.arc(0, 0, Math.max(0.8, mg.size * 0.05), 0, Math.PI * 2);
         ctx.fill();
 
         ctx.restore();
