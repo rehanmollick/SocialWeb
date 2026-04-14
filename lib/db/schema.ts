@@ -8,6 +8,8 @@ export const people = sqliteTable('people', {
   tags: text('tags').notNull().default('[]'),
   description: text('description').notNull().default(''),
   pinToMe: integer('pin_to_me', { mode: 'boolean' }).notNull().default(false),
+  x: real('x'),
+  y: real('y'),
   createdAt: integer('created_at').notNull().$defaultFn(() => Date.now()),
   updatedAt: integer('updated_at').notNull().$defaultFn(() => Date.now()),
 });

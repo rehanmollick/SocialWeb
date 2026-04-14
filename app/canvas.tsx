@@ -11,6 +11,8 @@ export type GraphNode = {
   tags: string[];
   description?: string;
   pinToMe?: boolean;
+  x?: number | null;
+  y?: number | null;
 };
 export type GraphEdge = { source: number; target: number; weight: number };
 export type ClusterEdge = { a: string; b: string; weight: number };
@@ -219,6 +221,7 @@ type GraphCanvasProps = {
   onSelectRope?: (sel: RopeSelection | null) => void;
   onConnectClusters?: (bgA: string, bgB: string) => void;
   onSelectClusterEdge?: (sel: ClusterEdgeSelection | null) => void;
+  onSavePositions?: (points: Array<{ id: number; x: number | null; y: number | null }>) => void;
   onCreateAt?: (screenX: number, screenY: number, bg: string) => void;
   onMoveGroup?: (ids: number[]) => void;
   focusId?: number | null;
@@ -240,7 +243,7 @@ function primaryTagOf(tags: string[]): string {
   return 'friends';
 }
 
-export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterClick, onHazeFaded, onConnect, onPinToMe, onSelectRope, onConnectClusters, onSelectClusterEdge, onCreateAt, onMoveGroup, focusId }: GraphCanvasProps) {
+export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterClick, onHazeFaded, onConnect, onPinToMe, onSelectRope, onConnectClusters, onSelectClusterEdge, onSavePositions, onCreateAt, onMoveGroup, focusId }: GraphCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const onSelectRef = useRef(onSelect);
@@ -252,6 +255,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
   const onSelectRopeRef = useRef(onSelectRope);
   const onConnectClustersRef = useRef(onConnectClusters);
   const onSelectClusterEdgeRef = useRef(onSelectClusterEdge);
+  const onSavePositionsRef = useRef(onSavePositions);
   const onCreateAtRef = useRef(onCreateAt);
   const onMoveGroupRef = useRef(onMoveGroup);
   const runtimeRef = useRef<Runtime | null>(null);
@@ -265,6 +269,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
   onSelectRopeRef.current = onSelectRope;
   onConnectClustersRef.current = onConnectClusters;
   onSelectClusterEdgeRef.current = onSelectClusterEdge;
+  onSavePositionsRef.current = onSavePositions;
   onCreateAtRef.current = onCreateAt;
   onMoveGroupRef.current = onMoveGroup;
   graphRef.current = graph;
@@ -713,9 +718,11 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       }
 
       // upsert nodes: mutate existing in place, add new at their bucket center
+      // (or at saved position if the server provided one).
       for (const n of payload.nodes) {
         const ex = existingById.get(n.id);
         const tags = Array.isArray(n.tags) ? [...n.tags] : [];
+        const hasSaved = typeof n.x === 'number' && typeof n.y === 'number';
         if (ex) {
           ex.name = n.name;
           ex.bg = n.bg;
@@ -725,26 +732,41 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           ex.description = n.description;
           ex.pinToMe = n.pinToMe;
           ex.primary = primaryTagOf(tags);
+          if (hasSaved) {
+            ex._ax = n.x as number;
+            ex._ay = n.y as number;
+            ex._pinned = true;
+            if (ex.x == null || ex.y == null) {
+              ex.x = n.x as number;
+              ex.y = n.y as number;
+            }
+          }
         } else {
           const c = bgCenters[n.bg in bgCenters ? n.bg : 'online'];
           const jitter = 2 + Math.random() * 6;
           const ang = Math.random() * Math.PI * 2;
+          const seedX = hasSaved ? (n.x as number) : c.x + Math.cos(ang) * jitter;
+          const seedY = hasSaved ? (n.y as number) : c.y + Math.sin(ang) * jitter;
           const sn: SimNode = {
             ...n,
             tags,
             s: n.strength,
             primary: primaryTagOf(tags),
-            x: c.x + Math.cos(ang) * jitter,
-            y: c.y + Math.sin(ang) * jitter,
+            x: seedX,
+            y: seedY,
             vx: 0,
             vy: 0,
             _starPhase: Math.random() * Math.PI * 2,
-            _pinned: false,
+            _pinned: hasSaved,
+            _ax: hasSaved ? (n.x as number) : undefined,
+            _ay: hasSaved ? (n.y as number) : undefined,
           };
           gNodes.push(sn);
         }
       }
 
+      // only nodes without a saved position get auto-layout. saved-position
+      // nodes keep their anchor (_pinned=true makes layoutBucket skip them).
       relayoutAll();
 
       // rebuild links by id -> node ref. replace gLinks array contents in place.
@@ -765,6 +787,35 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
 
     // ===== zoom/pan =====
     const currentTransform = { x: width / 2, y: height / 2, k: 1 };
+    // restore saved camera pose (survives reloads + landing → app roundtrips)
+    const CAMERA_KEY = 'socialweb-camera-v1';
+    try {
+      const raw = localStorage.getItem(CAMERA_KEY);
+      if (raw) {
+        const saved = JSON.parse(raw) as { x: number; y: number; k: number };
+        if (
+          typeof saved?.x === 'number' &&
+          typeof saved?.y === 'number' &&
+          typeof saved?.k === 'number'
+        ) {
+          currentTransform.x = saved.x;
+          currentTransform.y = saved.y;
+          currentTransform.k = saved.k;
+        }
+      }
+    } catch {}
+    let cameraSaveTimer: ReturnType<typeof setTimeout> | null = null;
+    const saveCameraSoon = () => {
+      if (cameraSaveTimer) clearTimeout(cameraSaveTimer);
+      cameraSaveTimer = setTimeout(() => {
+        try {
+          localStorage.setItem(
+            CAMERA_KEY,
+            JSON.stringify({ x: currentTransform.x, y: currentTransform.y, k: currentTransform.k })
+          );
+        } catch {}
+      }, 150);
+    };
     const hitNodeAt = (clientX: number, clientY: number): SimNode | null => {
       const rect = canvas.getBoundingClientRect();
       const mx = clientX - rect.left;
@@ -802,10 +853,16 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         currentTransform.x = ev.transform.x;
         currentTransform.y = ev.transform.y;
         currentTransform.k = ev.transform.k;
+        saveCameraSoon();
       });
     const sel = d3.select(canvas);
     sel.call(zoom);
-    zoom.transform(sel, d3.zoomIdentity.translate(currentTransform.x, currentTransform.y).scale(1));
+    zoom.transform(
+      sel,
+      d3.zoomIdentity
+        .translate(currentTransform.x, currentTransform.y)
+        .scale(currentTransform.k)
+    );
 
     // ===== drag =====
     let dragStartX = 0;
@@ -918,6 +975,24 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
             }
           }
           sim.alpha(0.12).restart();
+          // persist: the dropped nodes (pinned anchors) + every sibling whose
+          // layout anchor just changed. we send the new anchors as the saved
+          // position so they survive a reload.
+          const toSave: Array<{ id: number; x: number | null; y: number | null }> = [];
+          const seen = new Set<number>();
+          for (const m of movedNodes) {
+            toSave.push({ id: m.id, x: m._ax ?? m.x ?? 0, y: m._ay ?? m.y ?? 0 });
+            seen.add(m.id);
+          }
+          for (const bg of affectedBgs) {
+            for (const node of byBucket[bg] ?? []) {
+              if (seen.has(node.id)) continue;
+              if (node._ax == null || node._ay == null) continue;
+              toSave.push({ id: node.id, x: node._ax, y: node._ay });
+              seen.add(node.id);
+            }
+          }
+          if (toSave.length > 0) onSavePositionsRef.current?.(toSave);
         } else {
           n.fx = null;
           n.fy = null;
@@ -1098,6 +1173,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       if (groupDragging) {
         groupDragging = false;
         sim.alphaTarget(0);
+        const groupSave: Array<{ id: number; x: number | null; y: number | null }> = [];
         for (const n of gNodes) {
           if (!selectedIds.has(n.id)) continue;
           n._ax = n.fx ?? undefined;
@@ -1105,8 +1181,10 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           n._pinned = true;
           n.fx = null;
           n.fy = null;
+          groupSave.push({ id: n.id, x: n._ax ?? null, y: n._ay ?? null });
         }
         onMoveGroupRef.current?.(Array.from(selectedIds));
+        if (groupSave.length > 0) onSavePositionsRef.current?.(groupSave);
         suppressClickUntil = performance.now() + 300;
         try {
           canvas.releasePointerCapture(ev.pointerId);

@@ -539,6 +539,24 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
             }
           }}
           onConnectClusters={handleConnectClusters}
+          onSavePositions={async (points) => {
+            setGraph((g) => {
+              const map = new Map(points.map((p) => [p.id, p]));
+              return {
+                ...g,
+                nodes: g.nodes.map((n) => {
+                  const p = map.get(n.id);
+                  if (!p) return n;
+                  return { ...n, x: p.x, y: p.y };
+                }),
+              };
+            });
+            await fetch('/api/people/positions', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ positions: points }),
+            });
+          }}
           onClusterClick={(bg, sx, sy) => {
             const existing = (graph.bucketNames ?? {})[bg] ?? '';
             setClusterNamePopup({ bg, x: sx, y: sy, value: existing });

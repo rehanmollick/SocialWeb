@@ -12,6 +12,8 @@ type GraphNode = {
   tags: string[];
   description: string;
   pinToMe: boolean;
+  x: number | null;
+  y: number | null;
 };
 
 type GraphEdge = {
@@ -41,6 +43,8 @@ export async function GET() {
     tags: safeTags(p.tags),
     description: p.description ?? '',
     pinToMe: !!p.pinToMe,
+    x: p.x ?? null,
+    y: p.y ?? null,
   }));
 
   const byThought = new Map<number, number[]>();
