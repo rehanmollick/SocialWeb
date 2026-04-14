@@ -578,10 +578,11 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       for (const n of gNodes) {
         if (n._ax == null || n._ay == null) continue;
         if (n.fx != null) continue;
-        // stronger pull toward the layout anchor so clusters always tend
-        // toward their geometric polygon formation
-        n.vx = (n.vx ?? 0) + (n._ax - (n.x ?? 0)) * 0.32;
-        n.vy = (n.vy ?? 0) + (n._ay - (n.y ?? 0)) * 0.32;
+        // gentle pull toward the layout anchor — the formation should feel
+        // tendency-driven, not snapping. user-dragged nodes are pinned so
+        // the polygon morphs around them rather than fighting them.
+        n.vx = (n.vx ?? 0) + (n._ax - (n.x ?? 0)) * 0.08;
+        n.vy = (n.vy ?? 0) + (n._ay - (n.y ?? 0)) * 0.08;
       }
     };
 
@@ -605,8 +606,12 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     // lay out ONE bucket's nodes as regular polygons around its center.
     // for n<=8, single n-gon ring. For larger, center + rings of 6/12/18.
     // only touches unpinned nodes. x/y only set if unset (first placement).
-    const layoutBucket = (bg: string, bucket: SimNode[]) => {
-      const c = bgCenters[bg] ?? bgCenters.online;
+    const layoutBucket = (
+      bg: string,
+      bucket: SimNode[],
+      centerOverride?: { x: number; y: number },
+    ) => {
+      const c = centerOverride ?? bgCenters[bg] ?? bgCenters.online;
       const unpinned = bucket.filter((n) => !n._pinned);
       unpinned.sort((a, b) => b.s - a.s || a.name.localeCompare(b.name));
       const total = unpinned.length;
@@ -842,23 +847,44 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         if (!event.active) sim.alphaTarget(0);
         const n = event.subject as SimNode;
         if (dragMoved) {
-          // unpin the moved node(s) and re-layout so the cluster reflows into
-          // a regular polygon. the anchor force will smoothly pull everyone
-          // toward the new geometric formation.
-          if (dragGroupStart.length > 0) {
-            for (const g of dragGroupStart) {
-              g.n._pinned = false;
-              g.n.fx = null;
-              g.n.fy = null;
-            }
-            onMoveGroupRef.current?.(dragGroupStart.map((g) => g.n.id));
-          } else {
-            n._pinned = false;
-            n.fx = null;
-            n.fy = null;
+          // dropped nodes stay where the user put them. mark them pinned so
+          // layoutBucket skips them, clear fx/fy so collision can still nudge,
+          // then reflow each affected bucket's *unpinned* members around the
+          // live centroid of those remaining members. polygon forms around
+          // the drop instead of fighting it.
+          const movedNodes: SimNode[] =
+            dragGroupStart.length > 0 ? dragGroupStart.map((g) => g.n) : [n];
+          for (const m of movedNodes) {
+            m._pinned = true;
+            m._ax = m.x ?? m.fx ?? 0;
+            m._ay = m.y ?? m.fy ?? 0;
+            m.fx = null;
+            m.fy = null;
           }
-          relayoutAll();
-          sim.alpha(0.5).restart();
+          if (dragGroupStart.length > 0) {
+            onMoveGroupRef.current?.(dragGroupStart.map((g) => g.n.id));
+          }
+          const affectedBgs = new Set(movedNodes.map((m) => m.bg));
+          const byBucket: Record<string, SimNode[]> = {};
+          for (const node of gNodes) (byBucket[node.bg] ||= []).push(node);
+          for (const bg of affectedBgs) {
+            const bucket = byBucket[bg] ?? [];
+            const free = bucket.filter((m) => !m._pinned);
+            if (free.length > 0) {
+              let cx = 0;
+              let cy = 0;
+              for (const f of free) {
+                cx += f.x ?? 0;
+                cy += f.y ?? 0;
+              }
+              cx /= free.length;
+              cy /= free.length;
+              layoutBucket(bg, bucket, { x: cx, y: cy });
+            } else {
+              layoutBucket(bg, bucket);
+            }
+          }
+          sim.alpha(0.12).restart();
         } else {
           n.fx = null;
           n.fy = null;
