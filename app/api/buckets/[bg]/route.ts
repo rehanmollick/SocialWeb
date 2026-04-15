@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { eq } from 'drizzle-orm';
+import { eq, inArray, or } from 'drizzle-orm';
 import { db, schema } from '@/lib/db';
 
 export const runtime = 'nodejs';
@@ -37,9 +37,34 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ bg: string }>
   return NextResponse.json({ ok: true });
 }
 
-// DELETE clears the row entirely — name, rope override, everything.
-export async function DELETE(_req: Request, ctx: { params: Promise<{ bg: string }> }) {
+// DELETE clears the bucket_names row (name, rope override). With
+// ?withPeople=1 it ALSO wipes every person in this bg, any edge
+// overrides that reference them, and any cluster_edges touching the bg.
+// This is the "delete the whole accidental cluster" path.
+export async function DELETE(req: Request, ctx: { params: Promise<{ bg: string }> }) {
   const { bg } = await ctx.params;
+  const url = new URL(req.url);
+  const withPeople = url.searchParams.get('withPeople') === '1';
+
+  if (withPeople) {
+    const members = await db.query.people.findMany({ where: eq(schema.people.bg, bg) });
+    const ids = members.map((m) => m.id);
+    if (ids.length > 0) {
+      // edge_overrides has no FK to people — clean it up manually
+      await db
+        .delete(schema.edgeOverrides)
+        .where(
+          or(inArray(schema.edgeOverrides.aId, ids), inArray(schema.edgeOverrides.bId, ids)),
+        );
+      // mentions cascade on people delete via FK ON DELETE CASCADE
+      await db.delete(schema.people).where(inArray(schema.people.id, ids));
+    }
+    // wipe any cluster_edges anchored to this bg
+    await db
+      .delete(schema.clusterEdges)
+      .where(or(eq(schema.clusterEdges.bgA, bg), eq(schema.clusterEdges.bgB, bg)));
+  }
+
   await db.delete(schema.bucketNames).where(eq(schema.bucketNames.bg, bg));
   return NextResponse.json({ ok: true });
 }

@@ -942,6 +942,15 @@ button {
   color: #e89999;
   border-color: #e89999;
 }
+.cluster-name-popup .cluster-name-wipe {
+  border-color: rgba(232, 153, 153, 0.35);
+  color: rgba(232, 153, 153, 0.85);
+}
+.cluster-name-popup .cluster-name-wipe:hover {
+  background: rgba(232, 153, 153, 0.12);
+  color: #f0a8a8;
+  border-color: #e89999;
+}
 .create-popup {
   position: fixed;
   z-index: 30;

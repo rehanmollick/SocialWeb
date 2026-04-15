@@ -258,6 +258,37 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
     await fetchGraph();
   };
 
+  const deleteWholeCluster = async (bg: string) => {
+    const label = (graph.bucketNames ?? {})[bg] || bg;
+    const memberCount = graph.nodes.filter((n) => n.bg === bg).length;
+    const ok = window.confirm(
+      `Delete cluster "${label}" and all ${memberCount} people in it? This can't be undone.`,
+    );
+    if (!ok) return;
+    setClusterNamePopup(null);
+    setGraph((g) => {
+      const removedIds = new Set(g.nodes.filter((n) => n.bg === bg).map((n) => n.id));
+      const nextNames = { ...(g.bucketNames ?? {}) };
+      delete nextNames[bg];
+      const nextRopes = { ...(g.bucketRopes ?? {}) };
+      delete nextRopes[bg];
+      return {
+        ...g,
+        nodes: g.nodes.filter((n) => n.bg !== bg),
+        edges: g.edges.filter((e) => !removedIds.has(e.source) && !removedIds.has(e.target)),
+        bucketNames: nextNames,
+        bucketRopes: nextRopes,
+        clusterEdges: (g.clusterEdges ?? []).filter((e) => e.a !== bg && e.b !== bg),
+      };
+    });
+    setSelected(null);
+    setSelectedEdge(null);
+    setSelectedRope(null);
+    setSelectedClusterEdge(null);
+    await fetch(`/api/buckets/${encodeURIComponent(bg)}?withPeople=1`, { method: 'DELETE' });
+    await fetchGraph();
+  };
+
   // fired by the canvas when a named cluster's haze fades out (no members
   // left). clean up the stored name so it doesn't reappear on a future bucket
   // reuse with the same bg id.
@@ -712,6 +743,13 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
                 delete name
               </button>
             )}
+            <button
+              className="cluster-name-delete cluster-name-wipe"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => deleteWholeCluster(clusterNamePopup.bg)}
+            >
+              delete whole cluster
+            </button>
           </div>
         )}
 
