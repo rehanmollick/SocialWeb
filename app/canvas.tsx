@@ -662,72 +662,101 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     //
     // slot assignment is angular (nearest-in-ring by current angle) so the
     // polygon rotates smoothly with user drags instead of swapping slots.
-    // this is what makes "moving a dot around" reform the shape — drag node
-    // A clockwise past B and they smoothly exchange slots rather than
-    // snapping.
+    // LINK_DIST: two nodes of the same bg within this world distance are in
+    // the same sub-cluster. used for both the haze/shape grouping AND the
+    // click hit test. kept in one place so it stays consistent.
+    const LINK_DIST = 170;
+    const LINK_DIST_SQ = LINK_DIST * LINK_DIST;
+
+    // rebuilds n._liveBg with a component key ("ut" for the biggest
+    // component, "ut#2" for the next, etc). called once per frame BEFORE
+    // sim.tick() so shapeForce sees the same grouping the haze will use.
+    const computeLiveComponents = () => {
+      const byBg: Record<string, SimNode[]> = {};
+      for (const n of gNodes) {
+        if (!(n.bg in bgCenters)) {
+          n._liveBg = null;
+          continue;
+        }
+        (byBg[n.bg] ||= []).push(n);
+      }
+      for (const bg of Object.keys(byBg)) {
+        const nodes = byBg[bg];
+        const parent = nodes.map((_, i) => i);
+        const find = (i: number): number =>
+          parent[i] === i ? i : (parent[i] = find(parent[i]));
+        const union = (a: number, b: number) => {
+          const ra = find(a);
+          const rb = find(b);
+          if (ra !== rb) parent[ra] = rb;
+        };
+        for (let i = 0; i < nodes.length; i++) {
+          for (let j = i + 1; j < nodes.length; j++) {
+            const dx = (nodes[i].x ?? 0) - (nodes[j].x ?? 0);
+            const dy = (nodes[i].y ?? 0) - (nodes[j].y ?? 0);
+            if (dx * dx + dy * dy <= LINK_DIST_SQ) union(i, j);
+          }
+        }
+        const comps: Record<number, SimNode[]> = {};
+        for (let i = 0; i < nodes.length; i++) {
+          const r = find(i);
+          (comps[r] ||= []).push(nodes[i]);
+        }
+        const compArr = Object.values(comps).sort((a, b) => b.length - a.length);
+        for (let ci = 0; ci < compArr.length; ci++) {
+          const members = compArr[ci];
+          const key = ci === 0 ? bg : `${bg}#${ci + 1}`;
+          for (const n of members) n._liveBg = key;
+        }
+      }
+    };
+
+    // shape force: gently pull every component into a geometric formation
+    // around its own centroid. works on _liveBg (component key), not n.bg,
+    // so a dragged-out splinter forms its own tiny shape without yanking
+    // the main cluster.
     const shapeForce = () => {
-      const byBucket: Record<string, SimNode[]> = {};
+      const byComponent: Record<string, SimNode[]> = {};
       for (const n of gNodes) {
         if (n.pinToMe) continue;
-        (byBucket[n.bg] ||= []).push(n);
+        if (!n._liveBg) {
+          // orphan — self-anchor
+          n._ax = n.x ?? 0;
+          n._ay = n.y ?? 0;
+          continue;
+        }
+        (byComponent[n._liveBg] ||= []).push(n);
       }
-      for (const bucket of Object.values(byBucket)) {
-        const total = bucket.length;
+      for (const comp of Object.values(byComponent)) {
+        const total = comp.length;
         if (total === 0) continue;
-        // first-pass centroid from ALL members
+        if (total === 1) {
+          // solo node — keep wherever it is, no force
+          const only = comp[0];
+          only._ax = only.x ?? 0;
+          only._ay = only.y ?? 0;
+          continue;
+        }
         let cx = 0;
         let cy = 0;
-        for (const n of bucket) {
+        for (const n of comp) {
           cx += n.x ?? 0;
           cy += n.y ?? 0;
         }
         cx /= total;
         cy /= total;
 
-        // outlier exclusion: any node further than ~2.5× the polygon radius
-        // is treated as "loose" — not part of the formation. this is what
-        // lets the user physically drag a dot out of its cluster without
-        // the shape force either (a) yanking it back or (b) dragging the
-        // rest of the cluster along with it. loose nodes self-anchor so
-        // they stay exactly where the user dropped them.
-        const approxPolyRadius = total <= 8 ? 22 + total * 6 : 44 + 2 * 44;
-        const maxDist = approxPolyRadius * 2.5;
-        const inliers: SimNode[] = [];
-        const loose: SimNode[] = [];
-        for (const n of bucket) {
-          const d = Math.hypot((n.x ?? 0) - cx, (n.y ?? 0) - cy);
-          if (d <= maxDist) inliers.push(n);
-          else loose.push(n);
-        }
-        for (const n of loose) {
-          // self-anchor so charge/collide don't push them around
-          n._ax = n.x ?? 0;
-          n._ay = n.y ?? 0;
-        }
-        if (inliers.length === 0) continue;
-
-        // second-pass centroid from inliers only — drags no longer yank
-        // the polygon sideways, so the rest of the cluster stays put.
-        let icx = 0;
-        let icy = 0;
-        for (const n of inliers) {
-          icx += n.x ?? 0;
-          icy += n.y ?? 0;
-        }
-        icx /= inliers.length;
-        icy /= inliers.length;
-
-        const slots = computeSlots(icx, icy, inliers.length);
+        const slots = computeSlots(cx, cy, total);
         if (slots.length === 0) continue;
         const slotsByRing: Record<number, typeof slots> = {};
         for (const s of slots) (slotsByRing[s.ring] ||= []).push(s);
         const ringKeys = Object.keys(slotsByRing)
           .map(Number)
           .sort((a, b) => a - b);
-        const nodesByDist = inliers
+        const nodesByDist = comp
           .map((n) => ({
             n,
-            d: Math.hypot((n.x ?? 0) - icx, (n.y ?? 0) - icy),
+            d: Math.hypot((n.x ?? 0) - cx, (n.y ?? 0) - cy),
           }))
           .sort((a, b) => a.d - b.d);
         let cursor = 0;
@@ -740,15 +769,15 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           const nodesWithAngle = ringNodes
             .map((n) => ({
               n,
-              a: Math.atan2((n.y ?? 0) - icy, (n.x ?? 0) - icx),
+              a: Math.atan2((n.y ?? 0) - cy, (n.x ?? 0) - cx),
             }))
             .sort((a, b) => a.a - b.a);
           const slotsWithAngle = ringSlots
             .slice()
             .sort(
               (s1, s2) =>
-                Math.atan2(s1.y - icy, s1.x - icx) -
-                Math.atan2(s2.y - icy, s2.x - icx),
+                Math.atan2(s1.y - cy, s1.x - cx) -
+                Math.atan2(s2.y - cy, s2.x - cx),
             );
           for (let i = 0; i < nodesWithAngle.length; i++) {
             const { n } = nodesWithAngle[i];
@@ -1616,6 +1645,11 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     let raf = 0;
     const draw = () => {
       const now = performance.now();
+      // recompute spatial sub-clusters from the latest positions BEFORE the
+      // sim tick so shapeForce groups by the same components that the haze
+      // renders. sim.tick() then moves the nodes; the haze block below
+      // aggregates centroids/spread from the now-settled positions.
+      computeLiveComponents();
       sim.tick();
 
       if (now - lastShootSpawn > 1400 + Math.random() * 800) {
@@ -1704,62 +1738,25 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       ctx.translate(currentTransform.x, currentTransform.y);
       ctx.scale(currentTransform.k, currentTransform.k);
 
-      // ===== live cluster membership =====
-      // sub-cluster by spatial connectivity within each bg: two nodes of the
-      // same bg within LINK_DIST are in the same component. the largest
-      // component of a bg keeps the base key ("ut"); secondary components get
-      // suffixed keys ("ut#2", "ut#3") and render as separate unnamed hazes.
-      // this is what makes a dragged-out group form its own new cluster.
-      const LINK_DIST = 170;
-      const LINK_DIST_SQ = LINK_DIST * LINK_DIST;
+      // ===== live cluster aggregation =====
+      // components were already assigned to n._liveBg at the top of draw.
+      // here we just aggregate centroids and spread from the post-tick
+      // positions so the haze tracks what's actually on screen.
       type Live = { sx: number; sy: number; n: number; maxD2: number; cx: number; cy: number };
       const liveClusters: Record<string, Live> = {};
-
-      const byBgAll: Record<string, SimNode[]> = {};
       for (const n of gNodes) {
-        if (!(n.bg in bgCenters)) {
-          n._liveBg = null;
-          continue;
-        }
-        (byBgAll[n.bg] ||= []).push(n);
+        if (!n._liveBg) continue;
+        const c = liveClusters[n._liveBg] ||
+          (liveClusters[n._liveBg] = { sx: 0, sy: 0, n: 0, maxD2: 0, cx: 0, cy: 0 });
+        c.sx += n.x ?? 0;
+        c.sy += n.y ?? 0;
+        c.n += 1;
       }
-
-      for (const bg of Object.keys(byBgAll)) {
-        const nodes = byBgAll[bg];
-        const parent = nodes.map((_, i) => i);
-        const find = (i: number): number =>
-          parent[i] === i ? i : (parent[i] = find(parent[i]));
-        const union = (a: number, b: number) => {
-          const ra = find(a);
-          const rb = find(b);
-          if (ra !== rb) parent[ra] = rb;
-        };
-        for (let i = 0; i < nodes.length; i++) {
-          for (let j = i + 1; j < nodes.length; j++) {
-            const dx = (nodes[i].x ?? 0) - (nodes[j].x ?? 0);
-            const dy = (nodes[i].y ?? 0) - (nodes[j].y ?? 0);
-            if (dx * dx + dy * dy <= LINK_DIST_SQ) union(i, j);
-          }
-        }
-        const comps: Record<number, SimNode[]> = {};
-        for (let i = 0; i < nodes.length; i++) {
-          const r = find(i);
-          (comps[r] ||= []).push(nodes[i]);
-        }
-        const compArr = Object.values(comps).sort((a, b) => b.length - a.length);
-        for (let ci = 0; ci < compArr.length; ci++) {
-          const members = compArr[ci];
-          const key = ci === 0 ? bg : `${bg}#${ci + 1}`;
-          let sx = 0;
-          let sy = 0;
-          for (const n of members) {
-            sx += n.x ?? 0;
-            sy += n.y ?? 0;
-          }
-          const cx = sx / members.length;
-          const cy = sy / members.length;
-          liveClusters[key] = { sx, sy, n: members.length, maxD2: 0, cx, cy };
-          for (const n of members) n._liveBg = key;
+      for (const key in liveClusters) {
+        const c = liveClusters[key];
+        if (c.n > 0) {
+          c.cx = c.sx / c.n;
+          c.cy = c.sy / c.n;
         }
       }
 
@@ -1799,9 +1796,11 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         if (!st) {
           st = hazeState[key] = { x: live.cx || seed.x, y: live.cy || seed.y, r: 0, a: 0 };
         }
-        const MAX_SPREAD = 170;
+        // union-find already guarantees every member is within LINK_DIST of
+        // at least one other, so no spread gate — if you can see them as a
+        // group, they get haze.
         const spread = Math.sqrt(live.maxD2);
-        if (live.n >= 2 && spread <= MAX_SPREAD) {
+        if (live.n >= 2) {
           const compactness = (live.n + 0.8) / (1 + spread / 130);
           const targetR = Math.max(90, spread * 1.4 + 70);
           const targetA = Math.min(0.95, compactness * 0.32);
