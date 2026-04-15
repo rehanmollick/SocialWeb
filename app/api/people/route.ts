@@ -12,6 +12,8 @@ export async function POST(req: Request) {
     strength?: number;
     tags?: string[];
     description?: string;
+    x?: number;
+    y?: number;
   };
   const name = (body.name ?? '').trim();
   if (!name) return NextResponse.json({ error: 'name required' }, { status: 400 });
@@ -28,6 +30,9 @@ export async function POST(req: Request) {
   const tags = Array.isArray(body.tags) ? body.tags.filter((t) => typeof t === 'string') : [];
   const description = typeof body.description === 'string' ? body.description : '';
 
+  const x = typeof body.x === 'number' ? body.x : null;
+  const y = typeof body.y === 'number' ? body.y : null;
+
   const [created] = await db
     .insert(schema.people)
     .values({
@@ -36,6 +41,8 @@ export async function POST(req: Request) {
       strength,
       tags: JSON.stringify(tags),
       description,
+      x,
+      y,
       createdAt: now,
       updatedAt: now,
     })

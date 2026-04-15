@@ -48,6 +48,8 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
   const [createPopup, setCreatePopup] = useState<{
     x: number;
     y: number;
+    wx: number;
+    wy: number;
     bg: string;
     name: string;
     description: string;
@@ -301,6 +303,8 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
       description: createPopup.description,
       tags: createPopup.tags,
       strength: 5,
+      x: createPopup.wx,
+      y: createPopup.wy,
     };
     setCreatePopup(null);
     await fetch('/api/people', {
@@ -596,8 +600,8 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
           }}
           onConnect={handleConnect}
           onPinToMe={pinToMeById}
-          onCreateAt={(sx, sy, bg) => {
-            setCreatePopup({ x: sx, y: sy, bg, name: '', description: '', tags: [] });
+          onCreateAt={(sx, sy, wx, wy, bg) => {
+            setCreatePopup({ x: sx, y: sy, wx, wy, bg, name: '', description: '', tags: [] });
           }}
           onMoveGroup={() => {}}
           focusId={focusId}

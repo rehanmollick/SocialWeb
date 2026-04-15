@@ -222,7 +222,7 @@ type GraphCanvasProps = {
   onSelectClusterEdge?: (sel: ClusterEdgeSelection | null) => void;
   onSavePositions?: (points: Array<{ id: number; x: number | null; y: number | null }>) => void;
   onChangeBg?: (id: number, newBg: string) => void;
-  onCreateAt?: (screenX: number, screenY: number, bg: string) => void;
+  onCreateAt?: (screenX: number, screenY: number, worldX: number, worldY: number, bg: string) => void;
   onMoveGroup?: (ids: number[]) => void;
   focusId?: number | null;
 };
@@ -526,19 +526,6 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         ringTilt: Math.random() * Math.PI,
         ringTint: planetTints[(i + 3) % planetTints.length],
         glow: 0.3 + Math.random() * 0.5,
-      });
-    }
-
-    // a few distant black holes with accretion rings
-    for (let i = 0; i < 4; i++) {
-      const r = 1100 + Math.random() * 1600;
-      const ang = Math.random() * Math.PI * 2;
-      blackHoles.push({
-        x: Math.cos(ang) * r,
-        y: Math.sin(ang) * r,
-        radius: 14 + Math.random() * 14,
-        rot: Math.random() * Math.PI * 2,
-        spinSpeed: 0.3 + Math.random() * 0.4,
       });
     }
 
@@ -1246,11 +1233,16 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     let suppressClickUntil = 0;
 
     const nearestBgAt = (wx: number, wy: number): string => {
+      // prefer live cluster positions (haze centers) when a bucket is alive,
+      // so alt+clicking near a dragged cluster picks that cluster, not its
+      // original preset seed.
       let best = 'online';
       let bestD = Infinity;
       for (const bg of bgOrder) {
-        const c = bgCenters[bg];
-        const d = (c.x - wx) ** 2 + (c.y - wy) ** 2;
+        const st = hazeState[bg];
+        const cx = st && st.a > 0.05 ? st.x : bgCenters[bg].x;
+        const cy = st && st.a > 0.05 ? st.y : bgCenters[bg].y;
+        const d = (cx - wx) ** 2 + (cy - wy) ** 2;
         if (d < bestD) {
           bestD = d;
           best = bg;
@@ -1266,7 +1258,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         if (hit) return;
         const w = screenToWorld(ev.clientX, ev.clientY);
         const bg = nearestBgAt(w.x, w.y);
-        onCreateAtRef.current?.(ev.clientX, ev.clientY, bg);
+        onCreateAtRef.current?.(ev.clientX, ev.clientY, w.x, w.y, bg);
         suppressClickUntil = performance.now() + 400;
         ev.stopPropagation();
         ev.preventDefault();
@@ -1720,14 +1712,24 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           c.cy = c.sy / c.n;
         }
       }
+      // use a trimmed spread (80th percentile distance) instead of maxD2 so a
+      // single outlier dragged off-cluster doesn't inflate the haze radius.
+      const distsByBg: Record<string, number[]> = {};
       for (const n of gNodes) {
         if (!n._liveBg) continue;
         const c = liveClusters[n._liveBg];
         if (!c || c.n === 0) continue;
         const dx = (n.x ?? 0) - c.cx;
         const dy = (n.y ?? 0) - c.cy;
-        const d2 = dx * dx + dy * dy;
-        if (d2 > c.maxD2) c.maxD2 = d2;
+        (distsByBg[n._liveBg] ||= []).push(Math.hypot(dx, dy));
+      }
+      for (const bg in liveClusters) {
+        const arr = distsByBg[bg];
+        if (!arr || arr.length === 0) continue;
+        arr.sort((a, b) => a - b);
+        const idx = Math.min(arr.length - 1, Math.floor(arr.length * 0.8));
+        const trimmed = arr[idx];
+        liveClusters[bg].maxD2 = trimmed * trimmed;
       }
       const counts: Record<string, number> = {};
       for (const bg in liveClusters) counts[bg] = liveClusters[bg].n;
