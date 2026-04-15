@@ -665,19 +665,19 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     // LINK_DIST: two nodes of the same bg within this world distance are in
     // the same sub-cluster. used for both the haze/shape grouping AND the
     // click hit test. kept in one place so it stays consistent.
-    const LINK_DIST = 170;
+    const LINK_DIST = 260;
     const LINK_DIST_SQ = LINK_DIST * LINK_DIST;
 
     // rebuilds n._liveBg with a component key ("ut" for the biggest
     // component, "ut#2" for the next, etc). called once per frame BEFORE
     // sim.tick() so shapeForce sees the same grouping the haze will use.
+    // accepts any bg string — we no longer gate on bgCenters so user-
+    // created buckets (and splinter-key bgs) still cluster normally.
     const computeLiveComponents = () => {
       const byBg: Record<string, SimNode[]> = {};
       for (const n of gNodes) {
-        if (!(n.bg in bgCenters)) {
-          n._liveBg = null;
-          continue;
-        }
+        n._liveBg = null;
+        if (!n.bg) continue;
         (byBg[n.bg] ||= []).push(n);
       }
       for (const bg of Object.keys(byBg)) {
@@ -730,11 +730,14 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       for (const comp of Object.values(byComponent)) {
         const total = comp.length;
         if (total === 0) continue;
-        if (total === 1) {
-          // solo node — keep wherever it is, no force
-          const only = comp[0];
-          only._ax = only.x ?? 0;
-          only._ay = only.y ?? 0;
+        if (total < 4) {
+          // too small for a meaningful polygon — self-anchor so charge +
+          // collide settle them organically without rotating them into a
+          // forced orientation every tick.
+          for (const n of comp) {
+            n._ax = n.x ?? 0;
+            n._ay = n.y ?? 0;
+          }
           continue;
         }
         let cx = 0;
@@ -1153,15 +1156,17 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
             const py = m._ay ?? 0;
             let hitBg: string | null = null;
             let hitD2 = Infinity;
-            for (const bg of Object.keys(hazeState)) {
-              if (bg === m.bg) continue;
-              const st = hazeState[bg];
+            for (const key of Object.keys(hazeState)) {
+              // splinter sub-clusters aren't real bgs — you can't join one
+              if (key.includes('#')) continue;
+              if (key === m.bg) continue;
+              const st = hazeState[key];
               if (!st || st.a < 0.1) continue;
               const d2 = (st.x - px) ** 2 + (st.y - py) ** 2;
               const limit = (st.r * 0.7) ** 2;
               if (d2 < limit && d2 < hitD2) {
                 hitD2 = d2;
-                hitBg = bg;
+                hitBg = key;
               }
             }
             if (hitBg) {
@@ -1791,7 +1796,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       for (const key of Object.keys(liveClusters)) {
         const live = liveClusters[key];
         const baseBg = key.split('#')[0];
-        const seed = bgCenters[baseBg];
+        const seed = bgCenters[baseBg] ?? { x: live.cx, y: live.cy, angle: 0 };
         let st = hazeState[key];
         if (!st) {
           st = hazeState[key] = { x: live.cx || seed.x, y: live.cy || seed.y, r: 0, a: 0 };
