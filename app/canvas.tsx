@@ -1763,10 +1763,12 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         if (!st) {
           st = hazeState[bg] = { x: seed.x, y: seed.y, r: 0, a: 0 };
         }
-        if (live.n >= 2) {
-          const spread = Math.sqrt(live.maxD2);
-          // density = tight clusters fire bright, spread ones fade
-          // more sensitive: wider spread tolerance + higher base lift
+        // 2 people is enough to form a cluster, but ONLY if they're tight
+        // enough. beyond MAX_SPREAD the haze fades — loose pairs aren't a
+        // cluster, they're just two unrelated dots that happen to share a bg.
+        const MAX_SPREAD = 170;
+        const spread = Math.sqrt(live.maxD2);
+        if (live.n >= 2 && spread <= MAX_SPREAD) {
           const compactness = (live.n + 0.8) / (1 + spread / 130);
           const targetR = Math.max(90, spread * 1.4 + 70);
           const targetA = Math.min(0.95, compactness * 0.32);
