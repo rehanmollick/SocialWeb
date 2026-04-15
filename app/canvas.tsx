@@ -1692,41 +1692,26 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       ctx.scale(currentTransform.k, currentTransform.k);
 
       // ===== live cluster membership =====
-      const MAX_JOIN = 280;
-      const MAX_JOIN_SQ = MAX_JOIN * MAX_JOIN;
-      const seedCenters: Record<string, { x: number; y: number }> = {};
-      for (const bg of bgOrder) {
-        const st = hazeState[bg];
-        if (st && st.a > 0.05) seedCenters[bg] = { x: st.x, y: st.y };
-        else seedCenters[bg] = { x: bgCenters[bg].x, y: bgCenters[bg].y };
-      }
-
+      // classify by n.bg directly — the bg field is the source of truth for
+      // which bucket a person belongs to. previous versions used geometric
+      // proximity to a seed, which broke the moment a cluster was dragged
+      // more than MAX_JOIN away from its seed (haze deadlocks at 0 alpha and
+      // never catches up).
       type Live = { sx: number; sy: number; n: number; maxD2: number; cx: number; cy: number };
       const liveClusters: Record<string, Live> = {};
       for (const bg of bgOrder) liveClusters[bg] = { sx: 0, sy: 0, n: 0, maxD2: 0, cx: 0, cy: 0 };
 
       for (const n of gNodes) {
-        let bestBg: string | null = null;
-        let bestD2 = Infinity;
-        for (const bg of bgOrder) {
-          const s = seedCenters[bg];
-          const dx = (n.x ?? 0) - s.x;
-          const dy = (n.y ?? 0) - s.y;
-          const d2 = dx * dx + dy * dy;
-          if (d2 < bestD2) {
-            bestD2 = d2;
-            bestBg = bg;
-          }
-        }
-        if (bestBg && bestD2 < MAX_JOIN_SQ) {
-          n._liveBg = bestBg;
-          const c = liveClusters[bestBg];
-          c.sx += n.x ?? 0;
-          c.sy += n.y ?? 0;
-          c.n += 1;
-        } else {
+        const bg = n.bg in liveClusters ? n.bg : null;
+        if (!bg) {
           n._liveBg = null;
+          continue;
         }
+        n._liveBg = bg;
+        const c = liveClusters[bg];
+        c.sx += n.x ?? 0;
+        c.sy += n.y ?? 0;
+        c.n += 1;
       }
       for (const bg in liveClusters) {
         const c = liveClusters[bg];
