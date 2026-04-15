@@ -289,15 +289,6 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
     await fetchGraph();
   };
 
-  // fired by the canvas when a named cluster's haze fades out (no members
-  // left). clean up the stored name so it doesn't reappear on a future bucket
-  // reuse with the same bg id.
-  const handleHazeFaded = async (bg: string) => {
-    if (!(graph.bucketNames ?? {})[bg]) return;
-    await fetch(`/api/buckets/${encodeURIComponent(bg)}`, { method: 'DELETE' });
-    await fetchGraph();
-  };
-
   const submitCreatePopup = async () => {
     if (!createPopup) return;
     const name = createPopup.name.trim();
@@ -604,7 +595,6 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
             const existing = (graph.bucketNames ?? {})[bg] ?? '';
             setClusterNamePopup({ bg, x: sx, y: sy, value: existing });
           }}
-          onHazeFaded={handleHazeFaded}
           onConnect={handleConnect}
           onPinToMe={pinToMeById}
           onCreateAt={(sx, sy, bg) => {

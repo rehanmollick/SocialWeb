@@ -215,7 +215,6 @@ type GraphCanvasProps = {
   onSelect?: (node: GraphNode | null) => void;
   onSelectEdge?: (edge: EdgeSelection | null) => void;
   onClusterClick?: (bg: string, screenX: number, screenY: number) => void;
-  onHazeFaded?: (bg: string) => void;
   onConnect?: (aId: number, bId: number) => void;
   onPinToMe?: (id: number) => void;
   onSelectRope?: (sel: RopeSelection | null) => void;
@@ -244,13 +243,12 @@ function primaryTagOf(tags: string[]): string {
   return 'friends';
 }
 
-export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterClick, onHazeFaded, onConnect, onPinToMe, onSelectRope, onConnectClusters, onSelectClusterEdge, onSavePositions, onChangeBg, onCreateAt, onMoveGroup, focusId }: GraphCanvasProps) {
+export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterClick, onConnect, onPinToMe, onSelectRope, onConnectClusters, onSelectClusterEdge, onSavePositions, onChangeBg, onCreateAt, onMoveGroup, focusId }: GraphCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const onSelectRef = useRef(onSelect);
   const onSelectEdgeRef = useRef(onSelectEdge);
   const onClusterClickRef = useRef(onClusterClick);
-  const onHazeFadedRef = useRef(onHazeFaded);
   const onConnectRef = useRef(onConnect);
   const onPinToMeRef = useRef(onPinToMe);
   const onSelectRopeRef = useRef(onSelectRope);
@@ -265,7 +263,6 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
   onSelectRef.current = onSelect;
   onSelectEdgeRef.current = onSelectEdge;
   onClusterClickRef.current = onClusterClick;
-  onHazeFadedRef.current = onHazeFaded;
   onConnectRef.current = onConnect;
   onPinToMeRef.current = onPinToMe;
   onSelectRopeRef.current = onSelectRope;
@@ -333,12 +330,6 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     const asteroidBelts: AsteroidBelt[] = [];
     const distantGiants: Galaxy[] = [];
     const hazeState: Record<string, HazeState> = {};
-    const fadedBg: Record<string, boolean> = {};
-    // tracks which buckets have ever been visibly alive. the fade-out cleanup
-    // must only fire AFTER a cluster has truly appeared, otherwise the initial
-    // mount (when every haze starts at alpha 0) would immediately delete
-    // every stored cluster name before the haze has had a chance to fade in.
-    const hasBeenAlive: Record<string, boolean> = {};
     let lastShootSpawn = 0;
 
     const layers = [
@@ -1786,24 +1777,10 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         }
       }
 
-      // ===== fire haze-faded callback once per cluster when stored name drops below visible =====
-      // gate on hasBeenAlive so we only call the cleanup once the cluster has
-      // genuinely existed and then disappeared — never on the initial frames
-      // where alpha is still ramping up from 0.
-      const bucketNamesForFade = graphRef.current.bucketNames ?? {};
-      for (const bg of bgOrder) {
-        const st = hazeState[bg];
-        if (!st) continue;
-        if (st.a > 0.18) hasBeenAlive[bg] = true;
-        if (bucketNamesForFade[bg] && hasBeenAlive[bg] && st.a < 0.04) {
-          if (!fadedBg[bg]) {
-            fadedBg[bg] = true;
-            onHazeFadedRef.current?.(bg);
-          }
-        } else if (st.a > 0.12) {
-          fadedBg[bg] = false;
-        }
-      }
+      // cluster names are never auto-deleted on fade. the user names a cluster
+      // deliberately and it should outlive transient empty states (remounts,
+      // everyone dragged temporarily, etc). use the popup "clear" or "delete
+      // whole cluster" to remove a name explicitly.
 
       // ===== haze layer (dull mist — source-over so it reads as muted, not luminous) =====
       ctx.save();
