@@ -570,6 +570,18 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
             }
           }}
           onConnectClusters={handleConnectClusters}
+          onChangeBg={async (id, newBg) => {
+            setGraph((g) => ({
+              ...g,
+              nodes: g.nodes.map((n) => (n.id === id ? { ...n, bg: newBg } : n)),
+            }));
+            setSelected((prev) => (prev && prev.id === id ? { ...prev, bg: newBg } : prev));
+            await fetch(`/api/people/${id}`, {
+              method: 'PATCH',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ bg: newBg }),
+            });
+          }}
           onSavePositions={async (points) => {
             setGraph((g) => {
               const map = new Map(points.map((p) => [p.id, p]));

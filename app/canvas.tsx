@@ -222,6 +222,7 @@ type GraphCanvasProps = {
   onConnectClusters?: (bgA: string, bgB: string) => void;
   onSelectClusterEdge?: (sel: ClusterEdgeSelection | null) => void;
   onSavePositions?: (points: Array<{ id: number; x: number | null; y: number | null }>) => void;
+  onChangeBg?: (id: number, newBg: string) => void;
   onCreateAt?: (screenX: number, screenY: number, bg: string) => void;
   onMoveGroup?: (ids: number[]) => void;
   focusId?: number | null;
@@ -243,7 +244,7 @@ function primaryTagOf(tags: string[]): string {
   return 'friends';
 }
 
-export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterClick, onHazeFaded, onConnect, onPinToMe, onSelectRope, onConnectClusters, onSelectClusterEdge, onSavePositions, onCreateAt, onMoveGroup, focusId }: GraphCanvasProps) {
+export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterClick, onHazeFaded, onConnect, onPinToMe, onSelectRope, onConnectClusters, onSelectClusterEdge, onSavePositions, onChangeBg, onCreateAt, onMoveGroup, focusId }: GraphCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const onSelectRef = useRef(onSelect);
@@ -256,6 +257,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
   const onConnectClustersRef = useRef(onConnectClusters);
   const onSelectClusterEdgeRef = useRef(onSelectClusterEdge);
   const onSavePositionsRef = useRef(onSavePositions);
+  const onChangeBgRef = useRef(onChangeBg);
   const onCreateAtRef = useRef(onCreateAt);
   const onMoveGroupRef = useRef(onMoveGroup);
   const runtimeRef = useRef<Runtime | null>(null);
@@ -270,6 +272,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
   onConnectClustersRef.current = onConnectClusters;
   onSelectClusterEdgeRef.current = onSelectClusterEdge;
   onSavePositionsRef.current = onSavePositions;
+  onChangeBgRef.current = onChangeBg;
   onCreateAtRef.current = onCreateAt;
   onMoveGroupRef.current = onMoveGroup;
   graphRef.current = graph;
@@ -690,6 +693,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       for (const bucket of Object.values(byBucket)) {
         const total = bucket.length;
         if (total === 0) continue;
+        // first-pass centroid from ALL members
         let cx = 0;
         let cy = 0;
         for (const n of bucket) {
@@ -698,20 +702,51 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         }
         cx /= total;
         cy /= total;
-        const slots = computeSlots(cx, cy, total);
+
+        // outlier exclusion: any node further than ~2.5× the polygon radius
+        // is treated as "loose" — not part of the formation. this is what
+        // lets the user physically drag a dot out of its cluster without
+        // the shape force either (a) yanking it back or (b) dragging the
+        // rest of the cluster along with it. loose nodes self-anchor so
+        // they stay exactly where the user dropped them.
+        const approxPolyRadius = total <= 8 ? 22 + total * 6 : 44 + 2 * 44;
+        const maxDist = approxPolyRadius * 2.5;
+        const inliers: SimNode[] = [];
+        const loose: SimNode[] = [];
+        for (const n of bucket) {
+          const d = Math.hypot((n.x ?? 0) - cx, (n.y ?? 0) - cy);
+          if (d <= maxDist) inliers.push(n);
+          else loose.push(n);
+        }
+        for (const n of loose) {
+          // self-anchor so charge/collide don't push them around
+          n._ax = n.x ?? 0;
+          n._ay = n.y ?? 0;
+        }
+        if (inliers.length === 0) continue;
+
+        // second-pass centroid from inliers only — drags no longer yank
+        // the polygon sideways, so the rest of the cluster stays put.
+        let icx = 0;
+        let icy = 0;
+        for (const n of inliers) {
+          icx += n.x ?? 0;
+          icy += n.y ?? 0;
+        }
+        icx /= inliers.length;
+        icy /= inliers.length;
+
+        const slots = computeSlots(icx, icy, inliers.length);
         if (slots.length === 0) continue;
-        // group slots + nodes by ring. for single-ring buckets (total <= 8)
-        // this is a no-op (one ring). for larger buckets, innermost nodes
-        // by distance get the innermost ring, and so on outward.
         const slotsByRing: Record<number, typeof slots> = {};
         for (const s of slots) (slotsByRing[s.ring] ||= []).push(s);
         const ringKeys = Object.keys(slotsByRing)
           .map(Number)
           .sort((a, b) => a - b);
-        const nodesByDist = bucket
+        const nodesByDist = inliers
           .map((n) => ({
             n,
-            d: Math.hypot((n.x ?? 0) - cx, (n.y ?? 0) - cy),
+            d: Math.hypot((n.x ?? 0) - icx, (n.y ?? 0) - icy),
           }))
           .sort((a, b) => a.d - b.d);
         let cursor = 0;
@@ -724,15 +759,15 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           const nodesWithAngle = ringNodes
             .map((n) => ({
               n,
-              a: Math.atan2((n.y ?? 0) - cy, (n.x ?? 0) - cx),
+              a: Math.atan2((n.y ?? 0) - icy, (n.x ?? 0) - icx),
             }))
             .sort((a, b) => a.a - b.a);
           const slotsWithAngle = ringSlots
             .slice()
             .sort(
               (s1, s2) =>
-                Math.atan2(s1.y - cy, s1.x - cx) -
-                Math.atan2(s2.y - cy, s2.x - cx),
+                Math.atan2(s1.y - icy, s1.x - icx) -
+                Math.atan2(s2.y - icy, s2.x - icx),
             );
           for (let i = 0; i < nodesWithAngle.length; i++) {
             const { n } = nodesWithAngle[i];
@@ -1099,10 +1134,37 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
             m.fx = null;
             m.fy = null;
           }
+          // cross-cluster drop: if a node lands inside another cluster's
+          // visible haze, reassign its bg so it joins that cluster instead
+          // of being yanked back by its old one.
+          const oldBgsLosingMembers = new Set<string>();
+          for (const m of movedNodes) {
+            const px = m._ax ?? 0;
+            const py = m._ay ?? 0;
+            let hitBg: string | null = null;
+            let hitD2 = Infinity;
+            for (const bg of Object.keys(hazeState)) {
+              if (bg === m.bg) continue;
+              const st = hazeState[bg];
+              if (!st || st.a < 0.1) continue;
+              const d2 = (st.x - px) ** 2 + (st.y - py) ** 2;
+              const limit = (st.r * 0.7) ** 2;
+              if (d2 < limit && d2 < hitD2) {
+                hitD2 = d2;
+                hitBg = bg;
+              }
+            }
+            if (hitBg) {
+              oldBgsLosingMembers.add(m.bg);
+              m.bg = hitBg;
+              onChangeBgRef.current?.(m.id, hitBg);
+            }
+          }
           if (dragGroupStart.length > 0) {
             onMoveGroupRef.current?.(dragGroupStart.map((g) => g.n.id));
           }
           const affectedBgs = new Set(movedNodes.map((m) => m.bg));
+          for (const bg of oldBgsLosingMembers) affectedBgs.add(bg);
           const byBucket: Record<string, SimNode[]> = {};
           for (const node of gNodes) (byBucket[node.bg] ||= []).push(node);
           for (const bg of affectedBgs) {
