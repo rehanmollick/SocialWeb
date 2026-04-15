@@ -621,6 +621,129 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       }
     };
 
+    // compute polygon slot positions for `total` points around (cx, cy).
+    // mirrors layoutBucket's geometry: single n-gon for n <= 8, concentric
+    // rings for larger. tagged with ring index so multi-ring buckets can
+    // bin nodes by distance before angle-sorting.
+    const computeSlots = (
+      cx: number,
+      cy: number,
+      total: number,
+    ): Array<{ x: number; y: number; ring: number }> => {
+      const slots: Array<{ x: number; y: number; ring: number }> = [];
+      const orient = -Math.PI / 2;
+      if (total <= 0) return slots;
+      if (total === 1) {
+        slots.push({ x: cx, y: cy, ring: 0 });
+        return slots;
+      }
+      if (total <= 8) {
+        const radius = 22 + total * 6;
+        for (let i = 0; i < total; i++) {
+          const theta = orient + (i / total) * Math.PI * 2;
+          slots.push({
+            x: cx + Math.cos(theta) * radius,
+            y: cy + Math.sin(theta) * radius,
+            ring: 0,
+          });
+        }
+        return slots;
+      }
+      const ringSizes = [8, 14, 20, 26];
+      const baseRadius = 44;
+      let index = 0;
+      let ring = 0;
+      while (index < total) {
+        const cap = ringSizes[ring] ?? ringSizes[ringSizes.length - 1];
+        const take = Math.min(cap, total - index);
+        const radius = baseRadius + ring * 44;
+        const twist = ring % 2 === 0 ? 0 : Math.PI / cap;
+        for (let i = 0; i < take; i++) {
+          const theta = orient + twist + (i / take) * Math.PI * 2;
+          slots.push({
+            x: cx + Math.cos(theta) * radius,
+            y: cy + Math.sin(theta) * radius,
+            ring,
+          });
+          index++;
+        }
+        ring++;
+      }
+      return slots;
+    };
+
+    // dynamic "evenness" force: recomputes the polygon slot target for each
+    // bucket around its CURRENT centroid every tick, and writes the result
+    // into each node's _ax/_ay. anchorForce then does the gentle pulling.
+    //
+    // slot assignment is angular (nearest-in-ring by current angle) so the
+    // polygon rotates smoothly with user drags instead of swapping slots.
+    // this is what makes "moving a dot around" reform the shape — drag node
+    // A clockwise past B and they smoothly exchange slots rather than
+    // snapping.
+    const shapeForce = () => {
+      const byBucket: Record<string, SimNode[]> = {};
+      for (const n of gNodes) {
+        if (n.pinToMe) continue;
+        (byBucket[n.bg] ||= []).push(n);
+      }
+      for (const bucket of Object.values(byBucket)) {
+        const total = bucket.length;
+        if (total === 0) continue;
+        let cx = 0;
+        let cy = 0;
+        for (const n of bucket) {
+          cx += n.x ?? 0;
+          cy += n.y ?? 0;
+        }
+        cx /= total;
+        cy /= total;
+        const slots = computeSlots(cx, cy, total);
+        if (slots.length === 0) continue;
+        // group slots + nodes by ring. for single-ring buckets (total <= 8)
+        // this is a no-op (one ring). for larger buckets, innermost nodes
+        // by distance get the innermost ring, and so on outward.
+        const slotsByRing: Record<number, typeof slots> = {};
+        for (const s of slots) (slotsByRing[s.ring] ||= []).push(s);
+        const ringKeys = Object.keys(slotsByRing)
+          .map(Number)
+          .sort((a, b) => a - b);
+        const nodesByDist = bucket
+          .map((n) => ({
+            n,
+            d: Math.hypot((n.x ?? 0) - cx, (n.y ?? 0) - cy),
+          }))
+          .sort((a, b) => a.d - b.d);
+        let cursor = 0;
+        for (const rk of ringKeys) {
+          const ringSlots = slotsByRing[rk];
+          const ringNodes = nodesByDist
+            .slice(cursor, cursor + ringSlots.length)
+            .map((x) => x.n);
+          cursor += ringSlots.length;
+          const nodesWithAngle = ringNodes
+            .map((n) => ({
+              n,
+              a: Math.atan2((n.y ?? 0) - cy, (n.x ?? 0) - cx),
+            }))
+            .sort((a, b) => a.a - b.a);
+          const slotsWithAngle = ringSlots
+            .slice()
+            .sort(
+              (s1, s2) =>
+                Math.atan2(s1.y - cy, s1.x - cx) -
+                Math.atan2(s2.y - cy, s2.x - cx),
+            );
+          for (let i = 0; i < nodesWithAngle.length; i++) {
+            const { n } = nodesWithAngle[i];
+            const s = slotsWithAngle[i];
+            n._ax = s.x;
+            n._ay = s.y;
+          }
+        }
+      }
+    };
+
     const linkForce = d3
       .forceLink<SimNode, SimLink>(gLinks)
       .id((d) => d.id)
@@ -632,6 +755,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       .force('charge', d3.forceManyBody<SimNode>().strength(-40))
       .force('link', linkForce)
       .force('collide', d3.forceCollide<SimNode>().radius((n) => 9 + n.s * 1.2).strength(0.65))
+      .force('shape', shapeForce)
       .force('anchor', anchorForce)
       .alpha(0)
       .alphaDecay(0.06)
