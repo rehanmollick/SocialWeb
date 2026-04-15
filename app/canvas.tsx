@@ -589,6 +589,9 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     const bucketCentroid: Record<string, { x: number; y: number }> = {};
     // cluster-edge hit-test segments rebuilt every frame. world coords.
     let clusterEdgeSegs: Array<{ a: string; b: string; ax: number; ay: number; bx: number; by: number }> = [];
+    // named-cluster label hit boxes rebuilt every frame when labels draw.
+    // world coords, axis-aligned around the centered label baseline.
+    let clusterLabelHits: Array<{ bg: string; x: number; y: number; hw: number; hh: number }> = [];
 
     const anchorForce = () => {
       for (const n of gNodes) {
@@ -1555,24 +1558,39 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         return;
       }
 
-      // check if click is within a visible haze and has no user-set name yet
-      // any visible haze is clickable — empty ones get named, named ones open
-      // for rename/delete. AppPage reads the current name from graph.bucketNames.
-      let bestHazeBg: string | null = null;
-      let bestHazeD2 = Infinity;
-      for (const bg of bgOrder) {
-        const st = hazeState[bg];
-        if (!st || st.a < 0.12) continue;
-        const dx = wx - st.x;
-        const dy = wy - st.y;
-        const d2 = dx * dx + dy * dy;
-        if (d2 < st.r * st.r && d2 < bestHazeD2) {
-          bestHazeD2 = d2;
-          bestHazeBg = bg;
+      // cluster interaction:
+      //  - named cluster: click the label text (name + count) to open rename/delete
+      //  - unnamed cluster: click the small center hit area to open the name popup
+      // this stops the whole haze from swallowing every click.
+      const namesForHit = graphRef.current.bucketNames ?? {};
+      let hitBg: string | null = null;
+      for (const hb of clusterLabelHits) {
+        if (!namesForHit[hb.bg]) continue;
+        const dx = Math.abs(wx - hb.x);
+        const dy = Math.abs(wy - hb.y);
+        if (dx <= hb.hw && dy <= hb.hh) {
+          hitBg = hb.bg;
+          break;
         }
       }
-      if (bestHazeBg) {
-        onClusterClickRef.current?.(bestHazeBg, ev.clientX, ev.clientY);
+      if (!hitBg) {
+        // unnamed cluster: tight center hit
+        let bestCenterD2 = CLUSTER_CENTER_HIT_R * CLUSTER_CENTER_HIT_R;
+        for (const bg of bgOrder) {
+          if (namesForHit[bg]) continue;
+          const st = hazeState[bg];
+          if (!st || st.a < 0.12) continue;
+          const dx = wx - st.x;
+          const dy = wy - st.y;
+          const d2 = dx * dx + dy * dy;
+          if (d2 < bestCenterD2) {
+            bestCenterD2 = d2;
+            hitBg = bg;
+          }
+        }
+      }
+      if (hitBg) {
+        onClusterClickRef.current?.(hitBg, ev.clientX, ev.clientY);
         onSelectRef.current?.(null);
         onSelectEdgeRef.current?.(null);
         return;
@@ -2578,6 +2596,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       // ===== cluster labels (only user-named clusters) =====
       // sits just outside the haze horizon so the name crowns the cluster
       // rather than floating inside it. scales with zoom so it stays readable.
+      clusterLabelHits = [];
       const bucketNames = graphRef.current.bucketNames ?? {};
       for (const bg of bgOrder) {
         const st = hazeState[bg];
@@ -2597,6 +2616,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         ctx.globalAlpha = Math.min(1, st.a);
         // dark halo for legibility over any background
         ctx.font = `700 ${mainSize}px Inter, sans-serif`;
+        const metrics = ctx.measureText(label);
+        const labelW = metrics.width;
         ctx.fillStyle = 'rgba(0,0,0,0.85)';
         ctx.fillText(label, st.x + shadowOff, labelY + shadowOff);
         ctx.fillText(label, st.x - shadowOff, labelY + shadowOff);
@@ -2610,6 +2631,19 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         ctx.fillStyle = 'rgba(200,200,210,0.8)';
         ctx.fillText(`${count}`, st.x, labelY + subSize + 4 / currentTransform.k);
         ctx.globalAlpha = 1;
+        // hit box spans the name + count, centered on st.x, with a generous
+        // pad so it's easy to click. world coords.
+        const padX = 8 / currentTransform.k;
+        const padY = 6 / currentTransform.k;
+        const totalH = mainSize + subSize + 6 / currentTransform.k;
+        const centerY = labelY - mainSize / 2 + totalH / 2;
+        clusterLabelHits.push({
+          bg,
+          x: st.x,
+          y: centerY,
+          hw: labelW / 2 + padX,
+          hh: totalH / 2 + padY,
+        });
       }
 
       // ===== people nodes =====
