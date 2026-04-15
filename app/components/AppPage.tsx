@@ -203,7 +203,6 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
   };
 
   const deletePerson = async (id: number) => {
-    if (!confirm('delete this person and all their mentions?')) return;
     await fetch(`/api/people/${id}`, { method: 'DELETE' });
     setSelected(null);
     await fetchGraph();
