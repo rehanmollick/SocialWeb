@@ -1710,7 +1710,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       // component of a bg keeps the base key ("ut"); secondary components get
       // suffixed keys ("ut#2", "ut#3") and render as separate unnamed hazes.
       // this is what makes a dragged-out group form its own new cluster.
-      const LINK_DIST = 90;
+      const LINK_DIST = 170;
       const LINK_DIST_SQ = LINK_DIST * LINK_DIST;
       type Live = { sx: number; sy: number; n: number; maxD2: number; cx: number; cy: number };
       const liveClusters: Record<string, Live> = {};
