@@ -1574,18 +1574,21 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         }
       }
       if (!hitBg) {
-        // unnamed cluster: tight center hit
+        // unnamed primary cluster: tight center hit. secondary sub-clusters
+        // (splinter groups of the same bg) aren't directly nameable yet —
+        // they render as unnamed hazes until merged back.
         let bestCenterD2 = CLUSTER_CENTER_HIT_R * CLUSTER_CENTER_HIT_R;
-        for (const bg of bgOrder) {
-          if (namesForHit[bg]) continue;
-          const st = hazeState[bg];
+        for (const key of Object.keys(hazeState)) {
+          if (key.includes('#')) continue;
+          if (namesForHit[key]) continue;
+          const st = hazeState[key];
           if (!st || st.a < 0.12) continue;
           const dx = wx - st.x;
           const dy = wy - st.y;
           const d2 = dx * dx + dy * dy;
           if (d2 < bestCenterD2) {
             bestCenterD2 = d2;
-            hitBg = bg;
+            hitBg = key;
           }
         }
       }
@@ -1702,70 +1705,100 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       ctx.scale(currentTransform.k, currentTransform.k);
 
       // ===== live cluster membership =====
-      // classify by n.bg directly — the bg field is the source of truth for
-      // which bucket a person belongs to. previous versions used geometric
-      // proximity to a seed, which broke the moment a cluster was dragged
-      // more than MAX_JOIN away from its seed (haze deadlocks at 0 alpha and
-      // never catches up).
+      // sub-cluster by spatial connectivity within each bg: two nodes of the
+      // same bg within LINK_DIST are in the same component. the largest
+      // component of a bg keeps the base key ("ut"); secondary components get
+      // suffixed keys ("ut#2", "ut#3") and render as separate unnamed hazes.
+      // this is what makes a dragged-out group form its own new cluster.
+      const LINK_DIST = 90;
+      const LINK_DIST_SQ = LINK_DIST * LINK_DIST;
       type Live = { sx: number; sy: number; n: number; maxD2: number; cx: number; cy: number };
       const liveClusters: Record<string, Live> = {};
-      for (const bg of bgOrder) liveClusters[bg] = { sx: 0, sy: 0, n: 0, maxD2: 0, cx: 0, cy: 0 };
 
+      const byBgAll: Record<string, SimNode[]> = {};
       for (const n of gNodes) {
-        const bg = n.bg in liveClusters ? n.bg : null;
-        if (!bg) {
+        if (!(n.bg in bgCenters)) {
           n._liveBg = null;
           continue;
         }
-        n._liveBg = bg;
-        const c = liveClusters[bg];
-        c.sx += n.x ?? 0;
-        c.sy += n.y ?? 0;
-        c.n += 1;
+        (byBgAll[n.bg] ||= []).push(n);
       }
-      for (const bg in liveClusters) {
-        const c = liveClusters[bg];
-        if (c.n > 0) {
-          c.cx = c.sx / c.n;
-          c.cy = c.sy / c.n;
+
+      for (const bg of Object.keys(byBgAll)) {
+        const nodes = byBgAll[bg];
+        const parent = nodes.map((_, i) => i);
+        const find = (i: number): number =>
+          parent[i] === i ? i : (parent[i] = find(parent[i]));
+        const union = (a: number, b: number) => {
+          const ra = find(a);
+          const rb = find(b);
+          if (ra !== rb) parent[ra] = rb;
+        };
+        for (let i = 0; i < nodes.length; i++) {
+          for (let j = i + 1; j < nodes.length; j++) {
+            const dx = (nodes[i].x ?? 0) - (nodes[j].x ?? 0);
+            const dy = (nodes[i].y ?? 0) - (nodes[j].y ?? 0);
+            if (dx * dx + dy * dy <= LINK_DIST_SQ) union(i, j);
+          }
+        }
+        const comps: Record<number, SimNode[]> = {};
+        for (let i = 0; i < nodes.length; i++) {
+          const r = find(i);
+          (comps[r] ||= []).push(nodes[i]);
+        }
+        const compArr = Object.values(comps).sort((a, b) => b.length - a.length);
+        for (let ci = 0; ci < compArr.length; ci++) {
+          const members = compArr[ci];
+          const key = ci === 0 ? bg : `${bg}#${ci + 1}`;
+          let sx = 0;
+          let sy = 0;
+          for (const n of members) {
+            sx += n.x ?? 0;
+            sy += n.y ?? 0;
+          }
+          const cx = sx / members.length;
+          const cy = sy / members.length;
+          liveClusters[key] = { sx, sy, n: members.length, maxD2: 0, cx, cy };
+          for (const n of members) n._liveBg = key;
         }
       }
-      // use a trimmed spread (80th percentile distance) instead of maxD2 so a
-      // single outlier dragged off-cluster doesn't inflate the haze radius.
-      const distsByBg: Record<string, number[]> = {};
+
+      // trimmed spread (80th percentile distance) so one outlier can't
+      // balloon the haze
+      const distsByKey: Record<string, number[]> = {};
       for (const n of gNodes) {
         if (!n._liveBg) continue;
         const c = liveClusters[n._liveBg];
-        if (!c || c.n === 0) continue;
+        if (!c) continue;
         const dx = (n.x ?? 0) - c.cx;
         const dy = (n.y ?? 0) - c.cy;
-        (distsByBg[n._liveBg] ||= []).push(Math.hypot(dx, dy));
+        (distsByKey[n._liveBg] ||= []).push(Math.hypot(dx, dy));
       }
-      for (const bg in liveClusters) {
-        const arr = distsByBg[bg];
+      for (const key in liveClusters) {
+        const arr = distsByKey[key];
         if (!arr || arr.length === 0) continue;
         arr.sort((a, b) => a - b);
         const idx = Math.min(arr.length - 1, Math.floor(arr.length * 0.8));
         const trimmed = arr[idx];
-        liveClusters[bg].maxD2 = trimmed * trimmed;
+        liveClusters[key].maxD2 = trimmed * trimmed;
       }
       const counts: Record<string, number> = {};
-      for (const bg in liveClusters) counts[bg] = liveClusters[bg].n;
+      for (const key in liveClusters) counts[key] = liveClusters[key].n;
 
       const tSec = (now - startTime) / 1000;
       const hazePulse = 1 + 0.06 * Math.sin(tSec * 0.8);
       const lerp = 0.14;
       const shrinkLerp = 0.05;
-      for (const bg of bgOrder) {
-        const live = liveClusters[bg];
-        const seed = bgCenters[bg];
-        let st = hazeState[bg];
+
+      // ramp haze for every live sub-cluster
+      for (const key of Object.keys(liveClusters)) {
+        const live = liveClusters[key];
+        const baseBg = key.split('#')[0];
+        const seed = bgCenters[baseBg];
+        let st = hazeState[key];
         if (!st) {
-          st = hazeState[bg] = { x: seed.x, y: seed.y, r: 0, a: 0 };
+          st = hazeState[key] = { x: live.cx || seed.x, y: live.cy || seed.y, r: 0, a: 0 };
         }
-        // 2 people is enough to form a cluster, but ONLY if they're tight
-        // enough. beyond MAX_SPREAD the haze fades — loose pairs aren't a
-        // cluster, they're just two unrelated dots that happen to share a bg.
         const MAX_SPREAD = 170;
         const spread = Math.sqrt(live.maxD2);
         if (live.n >= 2 && spread <= MAX_SPREAD) {
@@ -1784,6 +1817,16 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         }
       }
 
+      // ramp down any haze whose sub-cluster disappeared this frame (e.g. the
+      // merged-back case where two components fused into one).
+      for (const key of Object.keys(hazeState)) {
+        if (key in liveClusters) continue;
+        const st = hazeState[key];
+        st.a += (0 - st.a) * 0.08;
+        st.r += (40 - st.r) * 0.08;
+        if (st.a < 0.005) delete hazeState[key];
+      }
+
       // cluster names are never auto-deleted on fade. the user names a cluster
       // deliberately and it should outlive transient empty states (remounts,
       // everyone dragged temporarily, etc). use the popup "clear" or "delete
@@ -1792,10 +1835,11 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       // ===== haze layer (dull mist — source-over so it reads as muted, not luminous) =====
       ctx.save();
       ctx.globalCompositeOperation = 'source-over';
-      for (const bg of bgOrder) {
-        const st = hazeState[bg];
+      for (const key of Object.keys(hazeState)) {
+        const st = hazeState[key];
         if (!st || st.a < 0.01) continue;
-        const color = bgColors[bg];
+        const baseBg = key.split('#')[0];
+        const color = bgColors[baseBg];
         // desaturate the cluster color toward a cool gray so the haze stays dull
         const dull = mixHex(color, '#8090a8', 0.65);
         const radius = st.r * hazePulse;
@@ -1814,7 +1858,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
 
         // three drifting wisps for billowy shape
         for (let i = 0; i < 3; i++) {
-          const theta = (i / 3) * Math.PI * 2 + tSec * 0.12 + bg.length * 0.6;
+          const theta = (i / 3) * Math.PI * 2 + tSec * 0.12 + key.length * 0.6;
           const wobble = 0.5 + 0.15 * Math.sin(tSec * 0.6 + i * 1.3);
           const lx = st.x + Math.cos(theta) * radius * 0.35 * wobble;
           const ly = st.y + Math.sin(theta) * radius * 0.35 * wobble;
@@ -2600,12 +2644,16 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       // rather than floating inside it. scales with zoom so it stays readable.
       clusterLabelHits = [];
       const bucketNames = graphRef.current.bucketNames ?? {};
-      for (const bg of bgOrder) {
-        const st = hazeState[bg];
+      for (const key of Object.keys(hazeState)) {
+        // only primary sub-clusters (key == base bg) can be named; secondary
+        // splinters stay unnamed until the user merges them back or renames.
+        if (key.includes('#')) continue;
+        const bg = key;
+        const st = hazeState[key];
         if (!st || st.a < 0.05) continue;
         const label = bucketNames[bg];
         if (!label) continue;
-        const count = counts[bg] || 0;
+        const count = counts[key] || 0;
         const mainSize = 20 / currentTransform.k;
         const subSize = 11 / currentTransform.k;
         const shadowOff = 1.5 / currentTransform.k;
