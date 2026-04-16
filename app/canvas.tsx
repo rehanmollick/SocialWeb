@@ -597,11 +597,11 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       for (const n of gNodes) {
         if (n._ax == null || n._ay == null) continue;
         if (n.fx != null) continue;
-        // gentle pull toward the layout anchor — the formation should feel
-        // tendency-driven, not snapping. user-dragged nodes are pinned so
-        // the polygon morphs around them rather than fighting them.
-        n.vx = (n.vx ?? 0) + (n._ax - (n.x ?? 0)) * 0.08;
-        n.vy = (n.vy ?? 0) + (n._ay - (n.y ?? 0)) * 0.08;
+        // pinned nodes (user-dragged) get a very strong anchor so link/charge
+        // forces can't drag them back toward their old cluster.
+        const k = n._pinned ? 0.55 : 0.08;
+        n.vx = (n.vx ?? 0) + (n._ax - (n.x ?? 0)) * k;
+        n.vy = (n.vy ?? 0) + (n._ay - (n.y ?? 0)) * k;
       }
     };
 
@@ -817,7 +817,12 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       .forceLink<SimNode, SimLink>(gLinks)
       .id((d) => d.id)
       .distance((l) => 80 / Math.sqrt(l.weight || 1))
-      .strength(0.05);
+      .strength((l) => {
+        const s = l.source as SimNode;
+        const t = l.target as SimNode;
+        if (s._liveBg && t._liveBg && s._liveBg !== t._liveBg) return 0;
+        return 0.05;
+      });
 
     const sim = d3
       .forceSimulation<SimNode>(gNodes)
@@ -1262,12 +1267,13 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     const hitBucketCenter = (wx: number, wy: number): string | null => {
       let best: string | null = null;
       let bestD2 = CLUSTER_CENTER_HIT_R * CLUSTER_CENTER_HIT_R;
-      for (const bg of Object.keys(bucketCentroid)) {
-        const c = bucketCentroid[bg];
+      for (const key of Object.keys(bucketCentroid)) {
+        if (key.includes('#')) continue;
+        const c = bucketCentroid[key];
         const d2 = (c.x - wx) ** 2 + (c.y - wy) ** 2;
         if (d2 < bestD2) {
           bestD2 = d2;
-          best = bg;
+          best = key;
         }
       }
       return best;
@@ -2457,14 +2463,14 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
 
-      type RopeAgg = { sumS: number; sumX: number; sumY: number; n: number };
+      type RopeAgg = { sumS: number; sumX: number; sumY: number; n: number; baseBg: string };
       const ropeAgg: Record<string, RopeAgg> = {};
       for (const n of gNodes) {
         if (n.pinToMe) continue;
-        // every non-empty bucket gets a rope — subgroups that form on the fly
-        // need a visible tie to "you" right away. we also aggregate positions
-        // so we can rope to a live centroid when the haze isn't up yet.
-        const a = (ropeAgg[n.bg] ||= { sumS: 0, sumX: 0, sumY: 0, n: 0 });
+        // group by live component so splinters get their own rope
+        const key = n._liveBg ?? n.bg;
+        const baseBg = key.split('#')[0];
+        const a = (ropeAgg[key] ||= { sumS: 0, sumX: 0, sumY: 0, n: 0, baseBg });
         a.sumS += n.s;
         a.sumX += n.x ?? 0;
         a.sumY += n.y ?? 0;
@@ -2476,28 +2482,29 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       // handler can target haze centers). prefer the haze center when the
       // haze is up, since that's where the user visually sees the cluster.
       for (const k of Object.keys(bucketCentroid)) delete bucketCentroid[k];
-      for (const bg of Object.keys(ropeAgg)) {
-        const agg = ropeAgg[bg];
+      for (const key of Object.keys(ropeAgg)) {
+        const agg = ropeAgg[key];
         if (agg.n < 1) continue;
-        const st = hazeState[bg];
+        const st = hazeState[key];
         if (st && st.a >= 0.05) {
-          bucketCentroid[bg] = { x: st.x, y: st.y };
+          bucketCentroid[key] = { x: st.x, y: st.y };
         } else {
-          bucketCentroid[bg] = { x: agg.sumX / agg.n, y: agg.sumY / agg.n };
+          bucketCentroid[key] = { x: agg.sumX / agg.n, y: agg.sumY / agg.n };
         }
       }
       const liveCentroid = bucketCentroid;
-      for (const bg of Object.keys(ropeAgg)) {
-        const agg = ropeAgg[bg];
+      for (const key of Object.keys(ropeAgg)) {
+        const agg = ropeAgg[key];
         if (agg.n < 1) continue;
+        const bg = agg.baseBg;
         const override = bucketRopes[bg];
         if (override?.hidden) continue;
-        const st = hazeState[bg];
+        const st = hazeState[key];
         // prefer the haze centroid when it's visible; fall back to the live
         // bucket centroid so brand-new clusters get a rope immediately.
         const hazeVisible = !!st && st.a >= 0.05;
-        const tx = hazeVisible ? st!.x : liveCentroid[bg].x;
-        const ty = hazeVisible ? st!.y : liveCentroid[bg].y;
+        const tx = hazeVisible ? st!.x : liveCentroid[key]?.x ?? agg.sumX / agg.n;
+        const ty = hazeVisible ? st!.y : liveCentroid[key]?.y ?? agg.sumY / agg.n;
         if (!hazeVisible && agg.n < 2) continue; // don't rope a solo dot
         const avgS = agg.sumS / agg.n;
         // user-set weight wins; otherwise fall back to the live avg strength
