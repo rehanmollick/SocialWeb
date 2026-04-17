@@ -747,15 +747,25 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => deleteClusterName(clusterNamePopup.bg)}
               >
-                delete name
+                clear name
               </button>
             )}
+            <button
+              className="cluster-name-delete"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                hideRope(clusterNamePopup.bg);
+                setClusterNamePopup(null);
+              }}
+            >
+              hide rope
+            </button>
             <button
               className="cluster-name-delete cluster-name-wipe"
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => deleteWholeCluster(clusterNamePopup.bg)}
             >
-              delete whole cluster
+              delete cluster
             </button>
           </div>
         )}

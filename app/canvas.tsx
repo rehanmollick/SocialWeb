@@ -834,10 +834,10 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       }
     };
 
-    // custom link force that checks _liveBg EVERY tick, not just at init.
-    // d3's forceLink caches strength at initialization, so a dynamic
-    // cross-component check never actually fires.
-    const customLinkForce = () => {
+    // custom link force — scales by alpha so the sim actually cools down.
+    // d3's forceLink caches strength at init so a dynamic _liveBg check
+    // never fires; this version checks every tick.
+    const customLinkForce = (alpha: number) => {
       for (const l of gLinks) {
         const s = l.source as SimNode;
         const t = l.target as SimNode;
@@ -846,8 +846,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         const dy = (t.y ?? 0) - (s.y ?? 0);
         const d = Math.sqrt(dx * dx + dy * dy) || 1;
         const target = 80 / Math.sqrt(l.weight || 1);
-        const k = 0.05;
-        const f = (d - target) / d * k * 0.5;
+        const f = (d - target) / d * 0.03 * alpha;
         s.vx = (s.vx ?? 0) + dx * f;
         s.vy = (s.vy ?? 0) + dy * f;
         t.vx = (t.vx ?? 0) - dx * f;
@@ -1806,12 +1805,17 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       // components were already assigned to n._liveBg at the top of draw.
       // here we just aggregate centroids and spread from the post-tick
       // positions so the haze tracks what's actually on screen.
-      type Live = { sx: number; sy: number; n: number; maxD2: number; cx: number; cy: number };
+      // aggregate centroids EXCLUDING nodes being dragged (fx != null).
+      // dragged nodes are still classified in the haze for coloring, but
+      // they don't pull the haze centroid around while the user drags.
+      type Live = { sx: number; sy: number; n: number; total: number; maxD2: number; cx: number; cy: number };
       const liveClusters: Record<string, Live> = {};
       for (const n of gNodes) {
         if (!n._liveBg) continue;
         const c = liveClusters[n._liveBg] ||
-          (liveClusters[n._liveBg] = { sx: 0, sy: 0, n: 0, maxD2: 0, cx: 0, cy: 0 });
+          (liveClusters[n._liveBg] = { sx: 0, sy: 0, n: 0, total: 0, maxD2: 0, cx: 0, cy: 0 });
+        c.total += 1;
+        if (n.fx != null) continue;
         c.sx += n.x ?? 0;
         c.sy += n.y ?? 0;
         c.n += 1;
@@ -1824,13 +1828,12 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         }
       }
 
-      // trimmed spread (80th percentile distance) so one outlier can't
-      // balloon the haze
+      // trimmed spread (80th percentile) — also excludes dragged nodes
       const distsByKey: Record<string, number[]> = {};
       for (const n of gNodes) {
-        if (!n._liveBg) continue;
+        if (!n._liveBg || n.fx != null) continue;
         const c = liveClusters[n._liveBg];
-        if (!c) continue;
+        if (!c || c.n === 0) continue;
         const dx = (n.x ?? 0) - c.cx;
         const dy = (n.y ?? 0) - c.cy;
         (distsByKey[n._liveBg] ||= []).push(Math.hypot(dx, dy));
@@ -1864,8 +1867,10 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         // at least one other, so no spread gate — if you can see them as a
         // group, they get haze.
         const spread = Math.sqrt(live.maxD2);
-        if (live.n >= 2) {
-          const compactness = (live.n + 0.8) / (1 + spread / 130);
+        // use total (includes dragged) to decide if cluster is alive,
+        // but use n (excludes dragged) for centroid/spread math.
+        if (live.total >= 2 && live.n >= 1) {
+          const compactness = (live.total + 0.8) / (1 + spread / 130);
           const targetR = Math.max(90, spread * 1.4 + 70);
           const targetA = Math.min(0.95, compactness * 0.32);
           const radiusLerp = targetR > st.r ? lerp : shrinkLerp;
