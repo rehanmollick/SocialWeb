@@ -227,7 +227,7 @@ type GraphCanvasProps = {
   focusId?: number | null;
 };
 
-export type RopeSelection = { bg: string };
+export type RopeSelection = { bg: string; baseBg: string; memberIds: number[] };
 export type ClusterEdgeSelection = { a: string; b: string; weight: number };
 
 type Runtime = {
@@ -1615,7 +1615,9 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         }
       }
       if (bestRope) {
-        onSelectRopeRef.current?.({ bg: bestRope });
+        const baseBg = bestRope.split('#')[0];
+        const memberIds = gNodes.filter((n) => n._liveBg === bestRope).map((n) => n.id);
+        onSelectRopeRef.current?.({ bg: bestRope, baseBg, memberIds });
         onSelectEdgeRef.current?.(null);
         onSelectRef.current?.(null);
         return;
@@ -2527,17 +2529,17 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         const agg = ropeAgg[key];
         if (agg.n < 1) continue;
         const bg = agg.baseBg;
-        const override = bucketRopes[bg];
-        if (override?.hidden) continue;
+        // check hidden per-key first, then fall back to baseBg override
+        const keyOverride = bucketRopes[key];
+        const bgOverride = bucketRopes[bg];
+        if (keyOverride?.hidden || bgOverride?.hidden) continue;
+        const override = keyOverride ?? bgOverride;
         const st = hazeState[key];
-        // prefer the haze centroid when it's visible; fall back to the live
-        // bucket centroid so brand-new clusters get a rope immediately.
         const hazeVisible = !!st && st.a >= 0.05;
         const tx = hazeVisible ? st!.x : liveCentroid[key]?.x ?? agg.sumX / agg.n;
         const ty = hazeVisible ? st!.y : liveCentroid[key]?.y ?? agg.sumY / agg.n;
         if (!hazeVisible && agg.n < 2) continue; // don't rope a solo dot
         const avgS = agg.sumS / agg.n;
-        // user-set weight wins; otherwise fall back to the live avg strength
         const displayS = override?.weight != null ? override.weight : avgS;
         const norm = displayS / 10;
         const sizeBoost = Math.min(1.4, 0.85 + Math.log10(agg.n + 1) * 0.45);
@@ -2551,7 +2553,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         ctx.moveTo(0, 0);
         ctx.lineTo(tx, ty);
         ctx.stroke();
-        ropeHitSegs.push({ bg, x: tx, y: ty });
+        ropeHitSegs.push({ bg: key, x: tx, y: ty });
       }
 
       // pinned direct lines (and any non-clustered/online pinned)

@@ -450,17 +450,19 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
   const edgePeopleB = selectedEdge ? graph.nodes.find((n) => n.id === selectedEdge.b) : null;
 
   const ropeBucketMembers = selectedRope
-    ? graph.nodes.filter((n) => n.bg === selectedRope.bg && !n.pinToMe)
+    ? graph.nodes.filter((n) => selectedRope.memberIds.includes(n.id))
     : [];
   const ropeAvgS =
     ropeBucketMembers.length > 0
       ? ropeBucketMembers.reduce((s, n) => s + n.strength, 0) / ropeBucketMembers.length
       : 5;
   const ropeOverride =
-    selectedRope && graph.bucketRopes ? graph.bucketRopes[selectedRope.bg] : undefined;
+    selectedRope && graph.bucketRopes
+      ? graph.bucketRopes[selectedRope.bg] ?? graph.bucketRopes[selectedRope.baseBg]
+      : undefined;
   const ropeDisplayWeight = ropeOverride?.weight ?? ropeAvgS;
   const ropeLabel =
-    selectedRope && (customNames[selectedRope.bg] || selectedRope.bg);
+    selectedRope && (customNames[selectedRope.baseBg] || selectedRope.baseBg);
 
   return (
     <div className={cls.join(' ')}>
@@ -1002,7 +1004,9 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
                 <div className="dd-name">
                   you <span style={{ color: 'var(--fg-muted)' }}>→</span> {ropeLabel}
                 </div>
-                <div className="dd-sub">cluster rope</div>
+                <div className="dd-sub">
+                  cluster rope · {ropeBucketMembers.length} {ropeBucketMembers.length === 1 ? 'person' : 'people'}
+                </div>
               </div>
               <button className="dd-close" onClick={() => setSelectedRope(null)}>
                 ×
@@ -1017,21 +1021,48 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
                   max={10}
                   step={0.5}
                   value={ropeDisplayWeight}
-                  onChange={(e) => patchRope(selectedRope.bg, { meWeight: Number(e.target.value) })}
+                  onChange={(e) => patchRope(selectedRope.baseBg, { meWeight: Number(e.target.value) })}
                 />
                 <span className="dd-strength-val">{ropeDisplayWeight.toFixed(1)}</span>
               </div>
               {ropeOverride?.weight != null && (
                 <button
                   className="dd-reset"
-                  onClick={() => patchRope(selectedRope.bg, { meWeight: null })}
+                  onClick={() => patchRope(selectedRope.baseBg, { meWeight: null })}
                 >
                   reset to avg ({ropeAvgS.toFixed(1)})
                 </button>
               )}
             </div>
-            <button className="dd-delete-person" onClick={() => hideRope(selectedRope.bg)}>
+            <button className="dd-delete-person" onClick={() => hideRope(selectedRope.baseBg)}>
               hide rope
+            </button>
+            <button
+              className="dd-delete-person"
+              style={{ marginTop: 6, background: '#6b2020' }}
+              onClick={async () => {
+                const count = ropeBucketMembers.length;
+                const ok = window.confirm(
+                  `Delete this cluster and all ${count} ${count === 1 ? 'person' : 'people'} in it? This can't be undone.`,
+                );
+                if (!ok) return;
+                const ids = selectedRope.memberIds;
+                setSelectedRope(null);
+                setGraph((g) => {
+                  const removeSet = new Set(ids);
+                  return {
+                    ...g,
+                    nodes: g.nodes.filter((n) => !removeSet.has(n.id)),
+                    edges: g.edges.filter((e) => !removeSet.has(e.source) && !removeSet.has(e.target)),
+                  };
+                });
+                await Promise.all(ids.map((id) =>
+                  fetch(`/api/people/${id}`, { method: 'DELETE' }),
+                ));
+                await fetchGraph();
+              }}
+            >
+              delete cluster
             </button>
           </div>
         )}
