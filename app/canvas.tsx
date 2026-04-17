@@ -665,64 +665,85 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     // LINK_DIST: two nodes of the same bg within this world distance are in
     // the same sub-cluster. used for both the haze/shape grouping AND the
     // click hit test. kept in one place so it stays consistent.
-    const LINK_DIST = 180;
+    const LINK_DIST = 160;
     const LINK_DIST_SQ = LINK_DIST * LINK_DIST;
 
-    // rebuilds n._liveBg with a component key ("ut" for the biggest
-    // component, "ut#2" for the next, etc). called once per frame BEFORE
-    // sim.tick() so shapeForce sees the same grouping the haze will use.
-    //
-    // two-pass: unpinned nodes union-find among themselves (the "main"
-    // cluster of each bg), then pinned nodes union-find only with other
-    // pinned nodes of the same bg. this means a dragged-out dot never
-    // gets absorbed back into the main cluster's component — it only
-    // joins up with OTHER dragged-out dots. drop two pinned dots close
-    // together → they form their own splinter, regardless of how close
-    // the main cluster is.
-    const clusterGroup = (nodes: SimNode[], startCompIndex: number, bg: string) => {
-      const parent = nodes.map((_, i) => i);
-      const find = (i: number): number =>
-        parent[i] === i ? i : (parent[i] = find(parent[i]));
-      const union = (a: number, b: number) => {
-        const ra = find(a);
-        const rb = find(b);
-        if (ra !== rb) parent[ra] = rb;
-      };
-      for (let i = 0; i < nodes.length; i++) {
-        for (let j = i + 1; j < nodes.length; j++) {
-          const dx = (nodes[i].x ?? 0) - (nodes[j].x ?? 0);
-          const dy = (nodes[i].y ?? 0) - (nodes[j].y ?? 0);
-          if (dx * dx + dy * dy <= LINK_DIST_SQ) union(i, j);
-        }
-      }
-      const comps: Record<number, SimNode[]> = {};
-      for (let i = 0; i < nodes.length; i++) {
-        const r = find(i);
-        (comps[r] ||= []).push(nodes[i]);
-      }
-      const compArr = Object.values(comps).sort((a, b) => b.length - a.length);
-      for (let ci = 0; ci < compArr.length; ci++) {
-        const members = compArr[ci];
-        const absoluteIndex = startCompIndex + ci;
-        const key = absoluteIndex === 0 ? bg : `${bg}#${absoluteIndex + 1}`;
-        for (const n of members) n._liveBg = key;
-      }
-      return compArr.length;
-    };
-
+    // haze-first classification: if a node sits inside a visible haze it
+    // belongs to that cluster. nodes outside every haze get union-found
+    // with nearby same-bg neighbours to form NEW clusters. this matches
+    // the visual model — the haze IS the cluster boundary.
     const computeLiveComponents = () => {
-      const freeByBg: Record<string, SimNode[]> = {};
-      const pinnedByBg: Record<string, SimNode[]> = {};
+      const free: SimNode[] = [];
       for (const n of gNodes) {
         n._liveBg = null;
         if (!n.bg) continue;
-        if (n._pinned) (pinnedByBg[n.bg] ||= []).push(n);
-        else (freeByBg[n.bg] ||= []).push(n);
+
+        // check existing hazes — closest visible haze wins
+        let bestKey: string | null = null;
+        let bestD2 = Infinity;
+        for (const key of Object.keys(hazeState)) {
+          const st = hazeState[key];
+          if (!st || st.a < 0.08) continue;
+          const dx = (n.x ?? 0) - st.x;
+          const dy = (n.y ?? 0) - st.y;
+          const d2 = dx * dx + dy * dy;
+          const limit = (st.r * 0.85) * (st.r * 0.85);
+          if (d2 < limit && d2 < bestD2) {
+            bestD2 = d2;
+            bestKey = key;
+          }
+        }
+        if (bestKey) {
+          n._liveBg = bestKey;
+        } else {
+          free.push(n);
+        }
       }
-      const allBgs = new Set([...Object.keys(freeByBg), ...Object.keys(pinnedByBg)]);
-      for (const bg of allBgs) {
-        const freeCount = clusterGroup(freeByBg[bg] ?? [], 0, bg);
-        clusterGroup(pinnedByBg[bg] ?? [], freeCount, bg);
+
+      // union-find free nodes by bg + proximity
+      const freeByBg: Record<string, SimNode[]> = {};
+      for (const n of free) (freeByBg[n.bg] ||= []).push(n);
+
+      // find which component indices are already taken by haze keys
+      const usedIndices: Record<string, Set<number>> = {};
+      for (const key of Object.keys(hazeState)) {
+        const base = key.split('#')[0];
+        const idx = key.includes('#') ? parseInt(key.split('#')[1]) - 1 : 0;
+        (usedIndices[base] ||= new Set()).add(idx);
+      }
+
+      for (const bg of Object.keys(freeByBg)) {
+        const nodes = freeByBg[bg];
+        const parent = nodes.map((_, i) => i);
+        const find = (i: number): number =>
+          parent[i] === i ? i : (parent[i] = find(parent[i]));
+        const union = (a: number, b: number) => {
+          const ra = find(a);
+          const rb = find(b);
+          if (ra !== rb) parent[ra] = rb;
+        };
+        for (let i = 0; i < nodes.length; i++) {
+          for (let j = i + 1; j < nodes.length; j++) {
+            const dx = (nodes[i].x ?? 0) - (nodes[j].x ?? 0);
+            const dy = (nodes[i].y ?? 0) - (nodes[j].y ?? 0);
+            if (dx * dx + dy * dy <= LINK_DIST_SQ) union(i, j);
+          }
+        }
+        const comps: Record<number, SimNode[]> = {};
+        for (let i = 0; i < nodes.length; i++) {
+          const r = find(i);
+          (comps[r] ||= []).push(nodes[i]);
+        }
+        const compArr = Object.values(comps).sort((a, b) => b.length - a.length);
+        const taken = usedIndices[bg] ?? new Set<number>();
+        let nextIdx = 0;
+        for (const members of compArr) {
+          while (taken.has(nextIdx)) nextIdx++;
+          const key = nextIdx === 0 ? bg : `${bg}#${nextIdx + 1}`;
+          for (const n of members) n._liveBg = key;
+          taken.add(nextIdx);
+          nextIdx++;
+        }
       }
     };
 
