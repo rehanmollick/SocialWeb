@@ -813,21 +813,31 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       }
     };
 
-    const linkForce = d3
-      .forceLink<SimNode, SimLink>(gLinks)
-      .id((d) => d.id)
-      .distance((l) => 80 / Math.sqrt(l.weight || 1))
-      .strength((l) => {
+    // custom link force that checks _liveBg EVERY tick, not just at init.
+    // d3's forceLink caches strength at initialization, so a dynamic
+    // cross-component check never actually fires.
+    const customLinkForce = () => {
+      for (const l of gLinks) {
         const s = l.source as SimNode;
         const t = l.target as SimNode;
-        if (s._liveBg && t._liveBg && s._liveBg !== t._liveBg) return 0;
-        return 0.05;
-      });
+        if (s._liveBg && t._liveBg && s._liveBg !== t._liveBg) continue;
+        const dx = (t.x ?? 0) - (s.x ?? 0);
+        const dy = (t.y ?? 0) - (s.y ?? 0);
+        const d = Math.sqrt(dx * dx + dy * dy) || 1;
+        const target = 80 / Math.sqrt(l.weight || 1);
+        const k = 0.05;
+        const f = (d - target) / d * k * 0.5;
+        s.vx = (s.vx ?? 0) + dx * f;
+        s.vy = (s.vy ?? 0) + dy * f;
+        t.vx = (t.vx ?? 0) - dx * f;
+        t.vy = (t.vy ?? 0) - dy * f;
+      }
+    };
 
     const sim = d3
       .forceSimulation<SimNode>(gNodes)
       .force('charge', d3.forceManyBody<SimNode>().strength(-40))
-      .force('link', linkForce)
+      .force('link', customLinkForce)
       .force('collide', d3.forceCollide<SimNode>().radius((n) => 9 + n.s * 1.2).strength(0.65))
       .force('shape', shapeForce)
       .force('anchor', anchorForce)
@@ -1003,7 +1013,6 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       }
 
       sim.nodes(gNodes);
-      linkForce.links(gLinks);
       sim.alpha(0.1).restart();
     };
 
