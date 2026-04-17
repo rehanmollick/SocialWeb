@@ -54,7 +54,7 @@ const tagColors: Record<string, string> = {
 // preset bucket labels intentionally empty — clusters are unnamed until the user names them.
 const bgLabels: Record<string, string> = {};
 const bgSubtitle: Record<string, string> = {};
-const bgColors: Record<string, string> = {
+const bgColorsPreset: Record<string, string> = {
   plano: '#7a9cb8',
   ut: '#c89060',
   allen: '#78a88c',
@@ -63,6 +63,24 @@ const bgColors: Record<string, string> = {
   climb: '#98b478',
   online: '#9c82b8',
 };
+const dynamicPalette = [
+  '#c87060', '#60a8c8', '#a8c860', '#c860a8', '#60c8a8',
+  '#c8a860', '#8860c8', '#c86088', '#6088c8', '#88c860',
+  '#c88860', '#6060c8',
+];
+const bgColorCache: Record<string, string> = {};
+function colorForBg(bg: string): string {
+  if (bgColorsPreset[bg]) return bgColorsPreset[bg];
+  if (bgColorCache[bg]) return bgColorCache[bg];
+  let h = 0;
+  for (let i = 0; i < bg.length; i++) h = (h * 31 + bg.charCodeAt(i)) & 0x7fffffff;
+  const c = dynamicPalette[h % dynamicPalette.length];
+  bgColorCache[bg] = c;
+  return c;
+}
+const bgColors: Record<string, string> = new Proxy(bgColorsPreset, {
+  get: (target, prop: string) => target[prop] ?? colorForBg(prop),
+});
 const bgOrder = ['plano', 'ut', 'allen', 'sf', 'family', 'climb', 'online'] as const;
 const CLUSTER_RADIUS = 340;
 
@@ -1202,17 +1220,19 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
             m.fx = null;
             m.fy = null;
           }
-          // cross-cluster drop: if a node lands inside another cluster's
-          // visible haze, reassign its bg so it joins that cluster instead
-          // of being yanked back by its old one.
+          // cross-cluster drop: figure out which cluster the node belongs to.
+          // 1. if inside another cluster's haze → join that bg
+          // 2. if near another node outside the main haze → adopt its bg
+          // 3. if alone outside all hazes → new unique bg
           const oldBgsLosingMembers = new Set<string>();
+          const movedSet = new Set(movedNodes.map((m) => m.id));
           for (const m of movedNodes) {
             const px = m._ax ?? 0;
             const py = m._ay ?? 0;
+            // check inside any visible haze (skip splinter keys)
             let hitBg: string | null = null;
             let hitD2 = Infinity;
             for (const key of Object.keys(hazeState)) {
-              // splinter sub-clusters aren't real bgs — you can't join one
               if (key.includes('#')) continue;
               if (key === m.bg) continue;
               const st = hazeState[key];
@@ -1222,6 +1242,30 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
               if (d2 < limit && d2 < hitD2) {
                 hitD2 = d2;
                 hitBg = key;
+              }
+            }
+            if (!hitBg) {
+              // check if still inside OWN cluster's haze
+              const ownSt = hazeState[m.bg];
+              const inOwnHaze = ownSt && ownSt.a > 0.1 &&
+                ((px - ownSt.x) ** 2 + (py - ownSt.y) ** 2) < (ownSt.r * 0.85) ** 2;
+              if (!inOwnHaze) {
+                // outside all hazes — find nearest non-moved node within LINK_DIST
+                let nearBg: string | null = null;
+                let nearD2 = LINK_DIST_SQ;
+                for (const other of gNodes) {
+                  if (movedSet.has(other.id)) continue;
+                  if (other.bg === m.bg) continue;
+                  const dx = (other.x ?? 0) - px;
+                  const dy = (other.y ?? 0) - py;
+                  const d2 = dx * dx + dy * dy;
+                  if (d2 < nearD2) { nearD2 = d2; nearBg = other.bg; }
+                }
+                if (nearBg) {
+                  hitBg = nearBg;
+                } else {
+                  hitBg = `c${Date.now()}-${m.id}`;
+                }
               }
             }
             if (hitBg) {
@@ -1666,12 +1710,9 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         }
       }
       if (!hitBg) {
-        // unnamed primary cluster: tight center hit. secondary sub-clusters
-        // (splinter groups of the same bg) aren't directly nameable yet —
-        // they render as unnamed hazes until merged back.
+        // unnamed cluster: tight center hit — any cluster can be named
         let bestCenterD2 = CLUSTER_CENTER_HIT_R * CLUSTER_CENTER_HIT_R;
         for (const key of Object.keys(hazeState)) {
-          if (key.includes('#')) continue;
           if (namesForHit[key]) continue;
           const st = hazeState[key];
           if (!st || st.a < 0.12) continue;
@@ -1907,7 +1948,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         const st = hazeState[key];
         if (!st || st.a < 0.01) continue;
         const baseBg = key.split('#')[0];
-        const color = bgColors[baseBg];
+        const color = colorForBg(baseBg);
         // desaturate the cluster color toward a cool gray so the haze stays dull
         const dull = mixHex(color, '#8090a8', 0.65);
         const radius = st.r * hazePulse;
@@ -2714,9 +2755,6 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       clusterLabelHits = [];
       const bucketNames = graphRef.current.bucketNames ?? {};
       for (const key of Object.keys(hazeState)) {
-        // only primary sub-clusters (key == base bg) can be named; secondary
-        // splinters stay unnamed until the user merges them back or renames.
-        if (key.includes('#')) continue;
         const bg = key;
         const st = hazeState[key];
         if (!st || st.a < 0.05) continue;
@@ -2741,7 +2779,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         ctx.fillText(label, st.x + shadowOff, labelY + shadowOff);
         ctx.fillText(label, st.x - shadowOff, labelY + shadowOff);
         // main fill in the cluster color, bright
-        ctx.fillStyle = hexToRgba(bgColors[bg] ?? '#cfd8ff', 1);
+        ctx.fillStyle = hexToRgba(colorForBg(bg) ?? '#cfd8ff', 1);
         ctx.fillText(label, st.x, labelY);
         // count pill underneath the name, still above the haze
         ctx.font = `${subSize}px 'JetBrains Mono', monospace`;
