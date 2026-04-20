@@ -1137,6 +1137,104 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     let dragStartX = 0;
     let dragStartY = 0;
     let dragMoved = false;
+    // shared drop handler: pins nodes, reassigns bg if outside haze,
+    // relays out affected buckets, persists positions.
+    const handleDrop = (movedNodes: SimNode[]) => {
+      for (const m of movedNodes) {
+        m._pinned = true;
+        m._ax = m.x ?? m.fx ?? 0;
+        m._ay = m.y ?? m.fy ?? 0;
+        m.fx = null;
+        m.fy = null;
+      }
+      const oldBgsLosingMembers = new Set<string>();
+      const movedSet = new Set(movedNodes.map((m) => m.id));
+      let sharedNewBg: string | null = null;
+      for (const m of movedNodes) {
+        const px = m._ax ?? 0;
+        const py = m._ay ?? 0;
+        let hitBg: string | null = null;
+        let hitD2 = Infinity;
+        for (const key of Object.keys(hazeState)) {
+          if (key.includes('#')) continue;
+          if (key === m.bg) continue;
+          const st = hazeState[key];
+          if (!st || st.a < 0.1) continue;
+          const d2 = (st.x - px) ** 2 + (st.y - py) ** 2;
+          const limit = (st.r * 0.7) ** 2;
+          if (d2 < limit && d2 < hitD2) {
+            hitD2 = d2;
+            hitBg = key;
+          }
+        }
+        if (!hitBg) {
+          const ownSt = hazeState[m.bg];
+          const inOwnHaze = ownSt && ownSt.a > 0.1 &&
+            ((px - ownSt.x) ** 2 + (py - ownSt.y) ** 2) < (ownSt.r * 0.85) ** 2;
+          if (!inOwnHaze) {
+            let nearBg: string | null = null;
+            let nearD2 = LINK_DIST_SQ;
+            for (const other of gNodes) {
+              if (movedSet.has(other.id)) continue;
+              if (other.bg === m.bg) continue;
+              const dx = (other.x ?? 0) - px;
+              const dy = (other.y ?? 0) - py;
+              const d2 = dx * dx + dy * dy;
+              if (d2 < nearD2) { nearD2 = d2; nearBg = other.bg; }
+            }
+            if (nearBg) {
+              hitBg = nearBg;
+            } else if (sharedNewBg) {
+              hitBg = sharedNewBg;
+            } else {
+              hitBg = `c${Date.now()}`;
+              sharedNewBg = hitBg;
+            }
+          }
+        }
+        if (hitBg) {
+          oldBgsLosingMembers.add(m.bg);
+          m.bg = hitBg;
+          onChangeBgRef.current?.(m.id, hitBg);
+        }
+      }
+      if (movedNodes.length > 1) {
+        onMoveGroupRef.current?.(movedNodes.map((m) => m.id));
+      }
+      const affectedBgs = new Set(movedNodes.map((m) => m.bg));
+      for (const bg of oldBgsLosingMembers) affectedBgs.add(bg);
+      const byBucket: Record<string, SimNode[]> = {};
+      for (const node of gNodes) (byBucket[node.bg] ||= []).push(node);
+      for (const bg of affectedBgs) {
+        const bucket = byBucket[bg] ?? [];
+        const free = bucket.filter((m) => !m._pinned);
+        if (free.length > 0) {
+          let cx = 0, cy = 0;
+          for (const f of free) { cx += f.x ?? 0; cy += f.y ?? 0; }
+          cx /= free.length; cy /= free.length;
+          layoutBucket(bg, bucket, { x: cx, y: cy });
+        } else {
+          layoutBucket(bg, bucket);
+        }
+      }
+      sim.alpha(0.12).restart();
+      const toSave: Array<{ id: number; x: number | null; y: number | null }> = [];
+      const seen = new Set<number>();
+      for (const m of movedNodes) {
+        toSave.push({ id: m.id, x: m._ax ?? m.x ?? 0, y: m._ay ?? m.y ?? 0 });
+        seen.add(m.id);
+      }
+      for (const bg of affectedBgs) {
+        for (const node of byBucket[bg] ?? []) {
+          if (seen.has(node.id)) continue;
+          if (node._ax == null || node._ay == null) continue;
+          toSave.push({ id: node.id, x: node._ax, y: node._ay });
+          seen.add(node.id);
+        }
+      }
+      if (toSave.length > 0) onSavePositionsRef.current?.(toSave);
+    };
+
     let dragGroupStart: Array<{ n: SimNode; ox: number; oy: number }> = [];
     const drag = d3
       .drag<HTMLCanvasElement, unknown>()
@@ -1206,117 +1304,9 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         if (!event.active) sim.alphaTarget(0);
         const n = event.subject as SimNode;
         if (dragMoved) {
-          // dropped nodes stay where the user put them. mark them pinned so
-          // layoutBucket skips them, clear fx/fy so collision can still nudge,
-          // then reflow each affected bucket's *unpinned* members around the
-          // live centroid of those remaining members. polygon forms around
-          // the drop instead of fighting it.
           const movedNodes: SimNode[] =
             dragGroupStart.length > 0 ? dragGroupStart.map((g) => g.n) : [n];
-          for (const m of movedNodes) {
-            m._pinned = true;
-            m._ax = m.x ?? m.fx ?? 0;
-            m._ay = m.y ?? m.fy ?? 0;
-            m.fx = null;
-            m.fy = null;
-          }
-          // cross-cluster drop: figure out which cluster the node belongs to.
-          // 1. if inside another cluster's haze → join that bg
-          // 2. if near another node outside the main haze → adopt its bg
-          // 3. if alone outside all hazes → new unique bg
-          const oldBgsLosingMembers = new Set<string>();
-          const movedSet = new Set(movedNodes.map((m) => m.id));
-          for (const m of movedNodes) {
-            const px = m._ax ?? 0;
-            const py = m._ay ?? 0;
-            // check inside any visible haze (skip splinter keys)
-            let hitBg: string | null = null;
-            let hitD2 = Infinity;
-            for (const key of Object.keys(hazeState)) {
-              if (key.includes('#')) continue;
-              if (key === m.bg) continue;
-              const st = hazeState[key];
-              if (!st || st.a < 0.1) continue;
-              const d2 = (st.x - px) ** 2 + (st.y - py) ** 2;
-              const limit = (st.r * 0.7) ** 2;
-              if (d2 < limit && d2 < hitD2) {
-                hitD2 = d2;
-                hitBg = key;
-              }
-            }
-            if (!hitBg) {
-              // check if still inside OWN cluster's haze
-              const ownSt = hazeState[m.bg];
-              const inOwnHaze = ownSt && ownSt.a > 0.1 &&
-                ((px - ownSt.x) ** 2 + (py - ownSt.y) ** 2) < (ownSt.r * 0.85) ** 2;
-              if (!inOwnHaze) {
-                // outside all hazes — find nearest non-moved node within LINK_DIST
-                let nearBg: string | null = null;
-                let nearD2 = LINK_DIST_SQ;
-                for (const other of gNodes) {
-                  if (movedSet.has(other.id)) continue;
-                  if (other.bg === m.bg) continue;
-                  const dx = (other.x ?? 0) - px;
-                  const dy = (other.y ?? 0) - py;
-                  const d2 = dx * dx + dy * dy;
-                  if (d2 < nearD2) { nearD2 = d2; nearBg = other.bg; }
-                }
-                if (nearBg) {
-                  hitBg = nearBg;
-                } else {
-                  hitBg = `c${Date.now()}-${m.id}`;
-                }
-              }
-            }
-            if (hitBg) {
-              oldBgsLosingMembers.add(m.bg);
-              m.bg = hitBg;
-              onChangeBgRef.current?.(m.id, hitBg);
-            }
-          }
-          if (dragGroupStart.length > 0) {
-            onMoveGroupRef.current?.(dragGroupStart.map((g) => g.n.id));
-          }
-          const affectedBgs = new Set(movedNodes.map((m) => m.bg));
-          for (const bg of oldBgsLosingMembers) affectedBgs.add(bg);
-          const byBucket: Record<string, SimNode[]> = {};
-          for (const node of gNodes) (byBucket[node.bg] ||= []).push(node);
-          for (const bg of affectedBgs) {
-            const bucket = byBucket[bg] ?? [];
-            const free = bucket.filter((m) => !m._pinned);
-            if (free.length > 0) {
-              let cx = 0;
-              let cy = 0;
-              for (const f of free) {
-                cx += f.x ?? 0;
-                cy += f.y ?? 0;
-              }
-              cx /= free.length;
-              cy /= free.length;
-              layoutBucket(bg, bucket, { x: cx, y: cy });
-            } else {
-              layoutBucket(bg, bucket);
-            }
-          }
-          sim.alpha(0.12).restart();
-          // persist: the dropped nodes (pinned anchors) + every sibling whose
-          // layout anchor just changed. we send the new anchors as the saved
-          // position so they survive a reload.
-          const toSave: Array<{ id: number; x: number | null; y: number | null }> = [];
-          const seen = new Set<number>();
-          for (const m of movedNodes) {
-            toSave.push({ id: m.id, x: m._ax ?? m.x ?? 0, y: m._ay ?? m.y ?? 0 });
-            seen.add(m.id);
-          }
-          for (const bg of affectedBgs) {
-            for (const node of byBucket[bg] ?? []) {
-              if (seen.has(node.id)) continue;
-              if (node._ax == null || node._ay == null) continue;
-              toSave.push({ id: node.id, x: node._ax, y: node._ay });
-              seen.add(node.id);
-            }
-          }
-          if (toSave.length > 0) onSavePositionsRef.current?.(toSave);
+          handleDrop(movedNodes);
         } else {
           n.fx = null;
           n.fy = null;
@@ -1503,18 +1493,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       if (groupDragging) {
         groupDragging = false;
         sim.alphaTarget(0);
-        const groupSave: Array<{ id: number; x: number | null; y: number | null }> = [];
-        for (const n of gNodes) {
-          if (!selectedIds.has(n.id)) continue;
-          n._ax = n.fx ?? undefined;
-          n._ay = n.fy ?? undefined;
-          n._pinned = true;
-          n.fx = null;
-          n.fy = null;
-          groupSave.push({ id: n.id, x: n._ax ?? null, y: n._ay ?? null });
-        }
-        onMoveGroupRef.current?.(Array.from(selectedIds));
-        if (groupSave.length > 0) onSavePositionsRef.current?.(groupSave);
+        const movedNodes = gNodes.filter((n) => selectedIds.has(n.id));
+        handleDrop(movedNodes);
         suppressClickUntil = performance.now() + 300;
         try {
           canvas.releasePointerCapture(ev.pointerId);
