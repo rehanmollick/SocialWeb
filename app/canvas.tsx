@@ -630,44 +630,61 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       cy: number,
       total: number,
     ): Array<{ x: number; y: number; ring: number }> => {
+      const SPACING = 46;
       const slots: Array<{ x: number; y: number; ring: number }> = [];
-      const orient = -Math.PI / 2;
       if (total <= 0) return slots;
       if (total === 1) {
         slots.push({ x: cx, y: cy, ring: 0 });
         return slots;
       }
-      if (total <= 8) {
-        const radius = 22 + total * 6;
-        for (let i = 0; i < total; i++) {
-          const theta = orient + (i / total) * Math.PI * 2;
-          slots.push({
-            x: cx + Math.cos(theta) * radius,
-            y: cy + Math.sin(theta) * radius,
-            ring: 0,
-          });
+
+      // triangular lattice (axial coords), skip center for clickability
+      const h = SPACING * Math.sqrt(3) / 2;
+      const gen = Math.ceil(Math.sqrt(total)) + 3;
+      const pts: Array<{ x: number; y: number; d2: number }> = [];
+      for (let r = -gen; r <= gen; r++) {
+        for (let q = -gen; q <= gen; q++) {
+          const x = SPACING * (q + r * 0.5);
+          const y = h * r;
+          const d2 = x * x + y * y;
+          if (d2 < 1) continue;
+          pts.push({ x, y, d2 });
         }
-        return slots;
       }
-      const ringSizes = [8, 14, 20, 26];
-      const baseRadius = 44;
-      let index = 0;
-      let ring = 0;
-      while (index < total) {
-        const cap = ringSizes[ring] ?? ringSizes[ringSizes.length - 1];
-        const take = Math.min(cap, total - index);
-        const radius = baseRadius + ring * 44;
-        const twist = ring % 2 === 0 ? 0 : Math.PI / cap;
-        for (let i = 0; i < take; i++) {
-          const theta = orient + twist + (i / take) * Math.PI * 2;
-          slots.push({
-            x: cx + Math.cos(theta) * radius,
-            y: cy + Math.sin(theta) * radius,
-            ring,
-          });
-          index++;
+      pts.sort((a, b) => a.d2 - b.d2 || Math.atan2(a.y, a.x) - Math.atan2(b.y, b.x));
+
+      // group into distance shells (points at the same radius)
+      const shells: Array<Array<{ x: number; y: number }>> = [];
+      let si = 0;
+      while (si < pts.length) {
+        const base = pts[si].d2;
+        let ei = si + 1;
+        while (ei < pts.length && Math.abs(pts[ei].d2 - base) < 1) ei++;
+        shells.push(pts.slice(si, ei).map(p => ({ x: p.x, y: p.y })));
+        si = ei;
+      }
+
+      // fill shells outward; partial shells pick evenly-spaced members
+      let remaining = total;
+      let ringIdx = 0;
+      for (const shell of shells) {
+        if (remaining <= 0) break;
+        const take = Math.min(shell.length, remaining);
+        if (take < shell.length) {
+          const sorted = shell.map(p => ({ ...p, a: Math.atan2(p.y, p.x) }))
+            .sort((a, b) => a.a - b.a);
+          const step = sorted.length / take;
+          for (let i = 0; i < take; i++) {
+            const p = sorted[Math.round(i * step) % sorted.length];
+            slots.push({ x: cx + p.x, y: cy + p.y, ring: ringIdx });
+          }
+        } else {
+          for (const p of shell) {
+            slots.push({ x: cx + p.x, y: cy + p.y, ring: ringIdx });
+          }
         }
-        ring++;
+        remaining -= take;
+        ringIdx++;
       }
       return slots;
     };
@@ -801,29 +818,6 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         }
         cx /= total;
         cy /= total;
-
-        if (total <= 3) {
-          // small groups: even out angles + radii around centroid but
-          // don't force a fixed orientation — keeps existing arrangement
-          // and just smooths it into a regular shape.
-          const targetR = 30 + total * 10;
-          const angles = comp.map((n) => Math.atan2((n.y ?? 0) - cy, (n.x ?? 0) - cx));
-          // sort by angle so we can space them evenly
-          const indexed = comp.map((n, i) => ({ n, a: angles[i] }));
-          indexed.sort((a, b) => a.a - b.a);
-          // target: keep the average angle but space evenly
-          const avgA = Math.atan2(
-            indexed.reduce((s, o) => s + Math.sin(o.a), 0),
-            indexed.reduce((s, o) => s + Math.cos(o.a), 0),
-          );
-          const step = (Math.PI * 2) / total;
-          for (let i = 0; i < indexed.length; i++) {
-            const theta = avgA + (i - (total - 1) / 2) * step;
-            indexed[i].n._ax = cx + Math.cos(theta) * targetR;
-            indexed[i].n._ay = cy + Math.sin(theta) * targetR;
-          }
-          continue;
-        }
 
         const slots = computeSlots(cx, cy, total);
         if (slots.length === 0) continue;
