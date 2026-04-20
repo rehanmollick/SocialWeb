@@ -615,9 +615,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       for (const n of gNodes) {
         if (n._ax == null || n._ay == null) continue;
         if (n.fx != null) continue;
-        // pinned nodes (user-dragged) get a very strong anchor so link/charge
-        // forces can't drag them back toward their old cluster.
-        const k = n._pinned ? 0.55 : 0.08;
+        const k = n._pinned ? 0.55 : 0.04;
         n.vx = (n.vx ?? 0) + (n._ax - (n.x ?? 0)) * k;
         n.vy = (n.vy ?? 0) + (n._ay - (n.y ?? 0)) * k;
       }
@@ -790,14 +788,9 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       for (const comp of Object.values(byComponent)) {
         const total = comp.length;
         if (total === 0) continue;
-        if (total < 4) {
-          // too small for a meaningful polygon — self-anchor so charge +
-          // collide settle them organically without rotating them into a
-          // forced orientation every tick.
-          for (const n of comp) {
-            n._ax = n.x ?? 0;
-            n._ay = n.y ?? 0;
-          }
+        if (total === 1) {
+          comp[0]._ax = comp[0].x ?? 0;
+          comp[0]._ay = comp[0].y ?? 0;
           continue;
         }
         let cx = 0;
@@ -808,6 +801,29 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         }
         cx /= total;
         cy /= total;
+
+        if (total <= 3) {
+          // small groups: even out angles + radii around centroid but
+          // don't force a fixed orientation — keeps existing arrangement
+          // and just smooths it into a regular shape.
+          const targetR = 22 + total * 6;
+          const angles = comp.map((n) => Math.atan2((n.y ?? 0) - cy, (n.x ?? 0) - cx));
+          // sort by angle so we can space them evenly
+          const indexed = comp.map((n, i) => ({ n, a: angles[i] }));
+          indexed.sort((a, b) => a.a - b.a);
+          // target: keep the average angle but space evenly
+          const avgA = Math.atan2(
+            indexed.reduce((s, o) => s + Math.sin(o.a), 0),
+            indexed.reduce((s, o) => s + Math.cos(o.a), 0),
+          );
+          const step = (Math.PI * 2) / total;
+          for (let i = 0; i < indexed.length; i++) {
+            const theta = avgA + (i - (total - 1) / 2) * step;
+            indexed[i].n._ax = cx + Math.cos(theta) * targetR;
+            indexed[i].n._ay = cy + Math.sin(theta) * targetR;
+          }
+          continue;
+        }
 
         const slots = computeSlots(cx, cy, total);
         if (slots.length === 0) continue;
