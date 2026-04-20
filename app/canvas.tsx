@@ -866,6 +866,26 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           }
         }
       }
+
+      // center-repulsion: gently push nodes out of a dead zone around
+      // each component's centroid so the cluster center stays clickable.
+      const MIN_CENTER_R = 28;
+      for (const comp of Object.values(byComponent)) {
+        if (comp.length < 2) continue;
+        let cx = 0, cy = 0;
+        for (const n of comp) { cx += n.x ?? 0; cy += n.y ?? 0; }
+        cx /= comp.length; cy /= comp.length;
+        for (const n of comp) {
+          const dx = (n.x ?? 0) - cx;
+          const dy = (n.y ?? 0) - cy;
+          const d = Math.sqrt(dx * dx + dy * dy) || 0.1;
+          if (d < MIN_CENTER_R) {
+            const push = (MIN_CENTER_R - d) * 0.06;
+            n.vx = (n.vx ?? 0) + (dx / d) * push;
+            n.vy = (n.vy ?? 0) + (dy / d) * push;
+          }
+        }
+      }
     };
 
     // custom link force — scales by alpha so the sim actually cools down.
@@ -2754,7 +2774,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         const bg = key;
         const st = hazeState[key];
         if (!st || st.a < 0.05) continue;
-        const label = bucketNames[bg];
+        const baseBg = bg.split('#')[0];
+        const label = bucketNames[bg] || bucketNames[baseBg];
         if (!label) continue;
         const count = counts[key] || 0;
         const mainSize = 20 / currentTransform.k;

@@ -597,8 +597,9 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
             });
           }}
           onClusterClick={(bg, sx, sy) => {
-            const existing = (graph.bucketNames ?? {})[bg] ?? '';
-            setClusterNamePopup({ bg, x: sx, y: sy, value: existing });
+            const baseBg = bg.split('#')[0];
+            const existing = (graph.bucketNames ?? {})[baseBg] ?? '';
+            setClusterNamePopup({ bg: baseBg, x: sx, y: sy, value: existing });
           }}
           onConnect={handleConnect}
           onPinToMe={pinToMeById}
