@@ -681,7 +681,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     // LINK_DIST: two nodes of the same bg within this world distance are in
     // the same sub-cluster. used for both the haze/shape grouping AND the
     // click hit test. kept in one place so it stays consistent.
-    const LINK_DIST = 160;
+    const LINK_DIST = 190;
     const LINK_DIST_SQ = LINK_DIST * LINK_DIST;
 
     // haze-first classification: if a node sits inside a visible haze it
@@ -806,7 +806,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           // small groups: even out angles + radii around centroid but
           // don't force a fixed orientation — keeps existing arrangement
           // and just smooths it into a regular shape.
-          const targetR = 22 + total * 6;
+          const targetR = 30 + total * 10;
           const angles = comp.map((n) => Math.atan2((n.y ?? 0) - cy, (n.x ?? 0) - cx));
           // sort by angle so we can space them evenly
           const indexed = comp.map((n, i) => ({ n, a: angles[i] }));
@@ -1185,57 +1185,108 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       }
       const oldBgsLosingMembers = new Set<string>();
       const movedSet = new Set(movedNodes.map((m) => m.id));
-      let sharedNewBg: string | null = null;
-      for (const m of movedNodes) {
-        const px = m._ax ?? 0;
-        const py = m._ay ?? 0;
-        let hitBg: string | null = null;
-        let hitD2 = Infinity;
+      const isGroup = movedNodes.length > 1;
+
+      if (isGroup) {
+        // group drag: decide ONE destination for the entire group using centroid
+        let gcx = 0, gcy = 0;
+        for (const m of movedNodes) { gcx += m._ax ?? 0; gcy += m._ay ?? 0; }
+        gcx /= movedNodes.length; gcy /= movedNodes.length;
+
+        let groupBg: string | null = null;
+        let bestD2 = Infinity;
         for (const key of Object.keys(hazeState)) {
           if (key.includes('#')) continue;
-          if (key === m.bg) continue;
           const st = hazeState[key];
           if (!st || st.a < 0.1) continue;
-          const d2 = (st.x - px) ** 2 + (st.y - py) ** 2;
+          const d2 = (st.x - gcx) ** 2 + (st.y - gcy) ** 2;
           const limit = (st.r * 0.7) ** 2;
-          if (d2 < limit && d2 < hitD2) {
-            hitD2 = d2;
-            hitBg = key;
-          }
+          if (d2 < limit && d2 < bestD2) { bestD2 = d2; groupBg = key; }
         }
-        if (!hitBg) {
-          const ownSt = hazeState[m.bg];
+        if (!groupBg) {
+          // check if centroid is still inside original haze of the majority
+          const bgCounts: Record<string, number> = {};
+          for (const m of movedNodes) bgCounts[m.bg] = (bgCounts[m.bg] ?? 0) + 1;
+          const majorBg = Object.entries(bgCounts).sort((a, b) => b[1] - a[1])[0][0];
+          const ownSt = hazeState[majorBg];
           const inOwnHaze = ownSt && ownSt.a > 0.1 &&
-            ((px - ownSt.x) ** 2 + (py - ownSt.y) ** 2) < (ownSt.r * 0.85) ** 2;
+            ((gcx - ownSt.x) ** 2 + (gcy - ownSt.y) ** 2) < (ownSt.r * 0.85) ** 2;
           if (!inOwnHaze) {
+            // check if any moved node is near a non-moved node
             let nearBg: string | null = null;
             let nearD2 = LINK_DIST_SQ;
-            for (const other of gNodes) {
-              if (movedSet.has(other.id)) continue;
-              if (other.bg === m.bg) continue;
-              const dx = (other.x ?? 0) - px;
-              const dy = (other.y ?? 0) - py;
-              const d2 = dx * dx + dy * dy;
-              if (d2 < nearD2) { nearD2 = d2; nearBg = other.bg; }
+            for (const m of movedNodes) {
+              const px = m._ax ?? 0, py = m._ay ?? 0;
+              for (const other of gNodes) {
+                if (movedSet.has(other.id)) continue;
+                const dx = (other.x ?? 0) - px;
+                const dy = (other.y ?? 0) - py;
+                const d2 = dx * dx + dy * dy;
+                if (d2 < nearD2) { nearD2 = d2; nearBg = other.bg; }
+              }
             }
-            if (nearBg) {
-              hitBg = nearBg;
-            } else if (sharedNewBg) {
-              hitBg = sharedNewBg;
-            } else {
-              hitBg = `c${Date.now()}`;
-              sharedNewBg = hitBg;
-            }
+            groupBg = nearBg ?? `c${Date.now()}`;
           }
         }
-        if (hitBg) {
-          oldBgsLosingMembers.add(m.bg);
-          m.bg = hitBg;
-          onChangeBgRef.current?.(m.id, hitBg);
+        if (groupBg) {
+          for (const m of movedNodes) {
+            if (m.bg !== groupBg) oldBgsLosingMembers.add(m.bg);
+            m.bg = groupBg;
+            onChangeBgRef.current?.(m.id, groupBg);
+          }
         }
-      }
-      if (movedNodes.length > 1) {
         onMoveGroupRef.current?.(movedNodes.map((m) => m.id));
+      } else {
+        // single node drop — per-node logic
+        let sharedNewBg: string | null = null;
+        for (const m of movedNodes) {
+          const px = m._ax ?? 0;
+          const py = m._ay ?? 0;
+          let hitBg: string | null = null;
+          let hitD2 = Infinity;
+          for (const key of Object.keys(hazeState)) {
+            if (key.includes('#')) continue;
+            if (key === m.bg) continue;
+            const st = hazeState[key];
+            if (!st || st.a < 0.1) continue;
+            const d2 = (st.x - px) ** 2 + (st.y - py) ** 2;
+            const limit = (st.r * 0.7) ** 2;
+            if (d2 < limit && d2 < hitD2) {
+              hitD2 = d2;
+              hitBg = key;
+            }
+          }
+          if (!hitBg) {
+            const ownSt = hazeState[m.bg];
+            const inOwnHaze = ownSt && ownSt.a > 0.1 &&
+              ((px - ownSt.x) ** 2 + (py - ownSt.y) ** 2) < (ownSt.r * 0.85) ** 2;
+            if (!inOwnHaze) {
+              let nearBg: string | null = null;
+              let nearD2 = LINK_DIST_SQ;
+              for (const other of gNodes) {
+                if (movedSet.has(other.id)) continue;
+                if (other.bg === m.bg) continue;
+                const dx = (other.x ?? 0) - px;
+                const dy = (other.y ?? 0) - py;
+                const d2 = dx * dx + dy * dy;
+                if (d2 < nearD2) { nearD2 = d2; nearBg = other.bg; }
+              }
+              if (nearBg) {
+                hitBg = nearBg;
+              } else if (sharedNewBg) {
+                hitBg = sharedNewBg;
+              } else {
+                hitBg = `c${Date.now()}`;
+                sharedNewBg = hitBg;
+              }
+            }
+          }
+          if (hitBg) {
+            oldBgsLosingMembers.add(m.bg);
+            m.bg = hitBg;
+            onChangeBgRef.current?.(m.id, hitBg);
+          }
+        }
       }
       const affectedBgs = new Set(movedNodes.map((m) => m.bg));
       for (const bg of oldBgsLosingMembers) affectedBgs.add(bg);
@@ -1928,7 +1979,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         // but use n (excludes dragged) for centroid/spread math.
         if (live.total >= 2 && live.n >= 1) {
           const compactness = (live.total + 0.8) / (1 + spread / 130);
-          const targetR = Math.max(90, spread * 1.4 + 70);
+          const targetR = Math.max(110, spread * 1.4 + 70);
           const targetA = Math.min(0.95, compactness * 0.32);
           const radiusLerp = targetR > st.r ? lerp : shrinkLerp;
           const alphaLerp = targetA > st.a ? lerp : shrinkLerp;
