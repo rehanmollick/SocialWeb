@@ -1314,6 +1314,33 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       for (const bg of oldBgsLosingMembers) affectedBgs.add(bg);
       const byBucket: Record<string, SimNode[]> = {};
       for (const node of gNodes) (byBucket[node.bg] ||= []).push(node);
+
+      // For group drops (2+ nodes): seed haze immediately so
+      // computeLiveComponents Phase 1 captures ALL members on tick 1,
+      // preventing union-find from splitting spread-out nodes into
+      // multiple micro-clusters.
+      if (movedNodes.length >= 2) {
+        const destBg = movedNodes[0].bg;
+        let hcx = 0, hcy = 0;
+        for (const m of movedNodes) { hcx += m._ax ?? m.x ?? 0; hcy += m._ay ?? m.y ?? 0; }
+        hcx /= movedNodes.length; hcy /= movedNodes.length;
+        let maxD = 0;
+        for (const m of movedNodes) {
+          const d = Math.hypot((m._ax ?? m.x ?? 0) - hcx, (m._ay ?? m.y ?? 0) - hcy);
+          if (d > maxD) maxD = d;
+        }
+        const seedR = Math.max(110, maxD * 1.4 + 70);
+        hazeState[destBg] = { x: hcx, y: hcy, r: seedR, a: 0.3 };
+      }
+
+      // Unpin group-dropped nodes so shapeForce can settle them into
+      // the triangular lattice. Keep _ax/_ay as starting hints.
+      if (movedNodes.length >= 2) {
+        for (const m of movedNodes) {
+          m._pinned = false;
+        }
+      }
+
       for (const bg of affectedBgs) {
         const bucket = byBucket[bg] ?? [];
         const free = bucket.filter((m) => !m._pinned);
@@ -1326,7 +1353,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           layoutBucket(bg, bucket);
         }
       }
-      sim.alpha(0.12).restart();
+      sim.alpha(0.3).restart();
       const toSave: Array<{ id: number; x: number | null; y: number | null }> = [];
       const seen = new Set<number>();
       for (const m of movedNodes) {
