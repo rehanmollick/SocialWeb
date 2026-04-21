@@ -778,6 +778,34 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           nextIdx++;
         }
       }
+
+      // cross-bg merge: solo free nodes near each other should cluster
+      // even if they have different bgs (e.g., dragged out individually)
+      const solos: SimNode[] = [];
+      for (const n of free) {
+        if (!n._liveBg) continue;
+        const peers = free.filter((o) => o._liveBg === n._liveBg);
+        if (peers.length === 1) solos.push(n);
+      }
+      if (solos.length >= 2) {
+        const sp = solos.map((_, i) => i);
+        const sf = (i: number): number => sp[i] === i ? i : (sp[i] = sf(sp[i]));
+        const su = (a: number, b: number) => { const ra = sf(a), rb = sf(b); if (ra !== rb) sp[ra] = rb; };
+        for (let i = 0; i < solos.length; i++) {
+          for (let j = i + 1; j < solos.length; j++) {
+            const dx = (solos[i].x ?? 0) - (solos[j].x ?? 0);
+            const dy = (solos[i].y ?? 0) - (solos[j].y ?? 0);
+            if (dx * dx + dy * dy <= LINK_DIST_SQ) su(i, j);
+          }
+        }
+        const merged: Record<number, SimNode[]> = {};
+        for (let i = 0; i < solos.length; i++) (merged[sf(i)] ||= []).push(solos[i]);
+        for (const group of Object.values(merged)) {
+          if (group.length < 2) continue;
+          const key = group[0]._liveBg!;
+          for (const n of group) n._liveBg = key;
+        }
+      }
     };
 
     // shape force: gently pull every component into a geometric formation
@@ -1204,7 +1232,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           const majorBg = Object.entries(bgCounts).sort((a, b) => b[1] - a[1])[0][0];
           const ownSt = hazeState[majorBg];
           const inOwnHaze = ownSt && ownSt.a > 0.1 &&
-            ((gcx - ownSt.x) ** 2 + (gcy - ownSt.y) ** 2) < (ownSt.r * 0.85) ** 2;
+            ((gcx - ownSt.x) ** 2 + (gcy - ownSt.y) ** 2) < (ownSt.r * 0.5) ** 2;
           if (!inOwnHaze) {
             // check if any moved node is near a non-moved node
             let nearBg: string | null = null;
@@ -1253,7 +1281,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           if (!hitBg) {
             const ownSt = hazeState[m.bg];
             const inOwnHaze = ownSt && ownSt.a > 0.1 &&
-              ((px - ownSt.x) ** 2 + (py - ownSt.y) ** 2) < (ownSt.r * 0.85) ** 2;
+              ((px - ownSt.x) ** 2 + (py - ownSt.y) ** 2) < (ownSt.r * 0.5) ** 2;
             if (!inOwnHaze) {
               let nearBg: string | null = null;
               let nearD2 = LINK_DIST_SQ;
