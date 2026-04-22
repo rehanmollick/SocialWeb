@@ -226,37 +226,50 @@ gives them same _liveBg → haze appears.
 **Mechanism**: Name saved to bucket_names by baseBg (strip # suffix).
 Label renderer falls back: bucketNames[key] || bucketNames[baseBg].
 
-### EC8: Delete a cluster
-**Expected**: All nodes and edges removed, haze fades.
-**Mechanism**: DELETE /api/buckets/{bg}?withPeople=1 → cascades.
+### EC8: Dissolve vs Delete a cluster
+**Dissolve**: Moves all nodes to "online" (default), removes cluster name/rope.
+People and edges preserved.
+**Delete all**: Permanently removes all nodes, edges, and cluster data.
+**Mechanism**: Dissolve = PATCH each person's bg + DELETE bucket_names.
+Delete = DELETE /api/buckets/{bg}?withPeople=1 → cascades.
 
 ### EC9: Box-select moves nodes but they spread across LINK_DIST
-**Expected**: Still ONE cluster if they share same bg.
-**Problem**: If spread > LINK_DIST (190), union-find splits them.
-**Fix needed**: After group drop, all share same bg. But if pinned nodes
-are far apart, computeLiveComponents union-find might split by proximity.
-The haze-capture in Phase 1 should prevent this once the haze is established,
-but there's a bootstrap gap: no haze exists yet on the first tick after drop.
-**Solution**: On group drop, also seed hazeState for the new bg immediately
-so Phase 1 captures all members on the very first tick.
+**Expected**: Still ONE cluster.
+**Mechanism**: Group handleDrop seeds hazeState immediately with a radius
+covering all dropped nodes. Phase 1 captures all members on tick 1.
+Group-dropped nodes are unpinned so shapeForce settles them into lattice.
 
-### EC10: Pinned nodes excluded from shapeForce
-**Expected**: They stay where dropped, unpinned nodes form lattice around them.
-**Current behavior**: Correct — pinned nodes keep _ax/_ay from drop point,
-shapeForce only adjusts unpinned nodes.
+### EC10: Click cluster center vs click node near center
+**Expected**: Clicking the center area opens cluster popup, not selects a node.
+**Mechanism**: Drag subject returns null if click is within CLUSTER_CENTER_HIT_R
+of any haze center. Center-repulsion (MIN_CENTER_R=38, push=0.15) keeps nodes
+well outside the click zone.
+
+### EC11: Hide rope, then want to show it again
+**Expected**: Hidden ropes appear in a "hidden ropes" list in the HUD.
+**Mechanism**: Controls HUD shows hidden ropes with a "show" button that
+patches meHidden=false via the bucket API.
 
 ---
 
-## Known Issues Being Fixed
+## LLM Integration
 
-1. **Group drop creates multiple micro-clusters**: When box-select moves
-   many nodes, handleDrop assigns them one bg. But on the next tick, if no
-   haze exists yet, computeLiveComponents union-finds them by proximity.
-   Spread-out nodes (> 190px apart) get split into multiple components,
-   each spawning its own haze. **Fix: seed haze on group drop.**
+### Command Bar (bottom input)
+Sends text to /api/command → Claude Haiku with 12 tools:
+- **log_thought**: Journal entry, auto-extracts people
+- **connect_people / disconnect_people**: Peer edges
+- **add_tag / remove_tag**: Tag management
+- **set_strength**: Person's closeness (0-10)
+- **set_background**: Move person to any cluster (preset or dynamic)
+- **rename_cluster**: Give cluster a display name
+- **delete_person**: Remove from graph
+- **connect_cluster / disconnect_cluster**: Interconnect/clear all edges in cluster
+- **pin_to_me / unpin_from_me**: Direct line toggle
 
-2. **Pinned nodes don't participate in lattice**: After drop, all moved
-   nodes are pinned. shapeForce skips them. Only NEW nodes added to the
-   cluster form the lattice. The cluster looks random because every node
-   is frozen at its drop position. **Fix: unpin nodes after a delay or
-   when the cluster stabilizes, so they can settle into lattice slots.**
+Claude receives a full graph snapshot (all people, clusters, tags, strengths)
+so it can resolve names, match display names to bucket ids, and make
+informed decisions. Up to 4 tool-calling turns per request.
+
+### Ask Panel (right sidebar)
+Sends question to /api/ask → Claude answers based on people data + recent
+journal entries. Returns referenced people for highlighting.

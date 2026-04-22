@@ -26,7 +26,7 @@ const SYSTEM_BASE = `You are the brain of a personal social-memory graph. The us
 - Journal / free-form note → call log_thought with the raw text. This extracts people automatically and strengthens connections.
 - Direct instructions like "connect sarah and jess strongly", "make alex high agency", "rename sf to bay area crew", "bump mike to 9", "delete jordan", "interconnect everyone in the climb cluster" → call the matching tool. You may call multiple tools in one turn.
 
-Buckets (internal ids): plano, ut, allen, sf, family, climb, online. The user may refer to a cluster by its custom display name (e.g. "PKP", "bay area crew") — match it to the bucket id from the snapshot below.
+Clusters have internal bucket ids. Presets: plano, ut, allen, sf, family, climb, online. User-created clusters have ids like "c1776725483571". The user may refer to a cluster by its custom display name — match it to the bucket id from the snapshot below.
 Strength scale: 0 (no connection) to 10 (inseparable). Default connection weight when unspecified: 3 for "connect", 6 for "connect strongly", 8 for "very strong".
 Tag vocabulary includes: highagency, highsignal, interesting, fun, friends, important, helpful, boring. Tags outside this list are fine too.
 
@@ -118,19 +118,19 @@ const tools: Anthropic.Tool[] = [
   },
   {
     name: 'set_background',
-    description: 'Move a person into a background bucket (plano, ut, allen, sf, family, climb, online).',
+    description: 'Move a person into a cluster. Use a bucket id from the snapshot (e.g. "plano", "ut", "c1776725483571", etc.).',
     input_schema: {
       type: 'object',
-      properties: { name: { type: 'string' }, bg: { type: 'string' } },
+      properties: { name: { type: 'string' }, bg: { type: 'string', description: 'Bucket id from the snapshot' } },
       required: ['name', 'bg'],
     },
   },
   {
     name: 'rename_cluster',
-    description: 'Give a bucket a custom display name.',
+    description: 'Give a cluster a custom display name. Use the bucket id from the snapshot.',
     input_schema: {
       type: 'object',
-      properties: { bg: { type: 'string' }, name: { type: 'string' } },
+      properties: { bg: { type: 'string', description: 'Bucket id from the snapshot' }, name: { type: 'string' } },
       required: ['bg', 'name'],
     },
   },
@@ -150,7 +150,7 @@ const tools: Anthropic.Tool[] = [
     input_schema: {
       type: 'object',
       properties: {
-        bg: { type: 'string', description: 'Bucket id: plano, ut, allen, sf, family, climb, online' },
+        bg: { type: 'string', description: 'Bucket id from the snapshot' },
         weight: { type: 'number', description: '0-10 strength for each new edge (default 5)' },
       },
       required: ['bg'],

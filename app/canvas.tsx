@@ -891,7 +891,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
 
       // center-repulsion: gently push nodes out of a dead zone around
       // each component's centroid so the cluster center stays clickable.
-      const MIN_CENTER_R = 28;
+      const MIN_CENTER_R = 38;
       for (const comp of Object.values(byComponent)) {
         if (comp.length < 2) continue;
         let cx = 0, cy = 0;
@@ -902,7 +902,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           const dy = (n.y ?? 0) - cy;
           const d = Math.sqrt(dx * dx + dy * dy) || 0.1;
           if (d < MIN_CENTER_R) {
-            const push = (MIN_CENTER_R - d) * 0.06;
+            const push = (MIN_CENTER_R - d) * 0.15;
             n.vx = (n.vx ?? 0) + (dx / d) * push;
             n.vy = (n.vy ?? 0) + (dy / d) * push;
           }
@@ -1387,6 +1387,15 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         const [mx, my] = d3.pointer(event, canvas);
         const wx = (mx - currentTransform.x) / currentTransform.k;
         const wy = (my - currentTransform.y) / currentTransform.k;
+        // if click is near a cluster center, don't pick up nodes —
+        // let the click handler open the cluster popup instead
+        for (const key of Object.keys(hazeState)) {
+          const st = hazeState[key];
+          if (!st || st.a < 0.12) continue;
+          const dx = wx - st.x;
+          const dy = wy - st.y;
+          if (dx * dx + dy * dy < CLUSTER_CENTER_HIT_R * CLUSTER_CENTER_HIT_R) return null;
+        }
         let best: SimNode | null = null;
         let bestD = 22 * 22;
         for (const n of gNodes) {

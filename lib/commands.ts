@@ -195,17 +195,18 @@ export async function setStrength(name: string, strength: number): Promise<ToolR
 }
 
 export async function setBackground(name: string, bg: string): Promise<ToolResult> {
-  if (!isBg(bg)) return { ok: false, message: `unknown bucket: ${bg}` };
-  const p = await ensurePerson(name, bg);
+  const trimBg = bg.trim();
+  if (!trimBg) return { ok: false, message: 'empty bucket id' };
+  // accept both preset bgs and user-created dynamic bgs (c1234...)
+  const p = await ensurePerson(name, isBg(trimBg) ? trimBg : 'online');
   await db
     .update(schema.people)
-    .set({ bg, updatedAt: Date.now() })
+    .set({ bg: trimBg, updatedAt: Date.now() })
     .where(eq(schema.people.id, p.id));
-  return { ok: true, message: `${p.name} → ${bg}` };
+  return { ok: true, message: `${p.name} → ${trimBg}` };
 }
 
 export async function renameCluster(bg: string, name: string): Promise<ToolResult> {
-  if (!isBg(bg)) return { ok: false, message: `unknown bucket: ${bg}` };
   const clean = name.trim();
   if (!clean) return { ok: false, message: 'empty name' };
   const existing = await db.query.bucketNames.findFirst({
@@ -250,7 +251,6 @@ export async function unpinFromMe(name: string): Promise<ToolResult> {
 }
 
 export async function disconnectCluster(bg: string): Promise<ToolResult> {
-  if (!isBg(bg)) return { ok: false, message: `unknown bucket: ${bg}` };
   const members = await db.query.people.findMany({
     where: eq(schema.people.bg, bg),
   });
@@ -275,7 +275,6 @@ export async function connectCluster(
   bg: string,
   weight = 5
 ): Promise<ToolResult> {
-  if (!isBg(bg)) return { ok: false, message: `unknown bucket: ${bg}` };
   const members = await db.query.people.findMany({
     where: eq(schema.people.bg, bg),
   });

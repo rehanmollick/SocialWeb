@@ -259,11 +259,46 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
     await fetchGraph();
   };
 
+  const dissolveCluster = async (bg: string) => {
+    const label = (graph.bucketNames ?? {})[bg] || bg;
+    const members = graph.nodes.filter((n) => n.bg === bg);
+    if (members.length === 0) return;
+    const ok = window.confirm(
+      `Dissolve cluster "${label}"? The ${members.length} ${members.length === 1 ? 'person' : 'people'} will move to the default group.`,
+    );
+    if (!ok) return;
+    setClusterNamePopup(null);
+    setSelectedRope(null);
+    setGraph((g) => {
+      const nextNodes = g.nodes.map((n) => n.bg === bg ? { ...n, bg: 'online', x: undefined, y: undefined } : n);
+      const nextNames = { ...(g.bucketNames ?? {}) };
+      delete nextNames[bg];
+      const nextRopes = { ...(g.bucketRopes ?? {}) };
+      delete nextRopes[bg];
+      return {
+        ...g,
+        nodes: nextNodes,
+        bucketNames: nextNames,
+        bucketRopes: nextRopes,
+        clusterEdges: (g.clusterEdges ?? []).filter((e) => e.a !== bg && e.b !== bg),
+      };
+    });
+    await Promise.all(members.map((m) =>
+      fetch(`/api/people/${m.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ bg: 'online' }),
+      }),
+    ));
+    await fetch(`/api/buckets/${encodeURIComponent(bg)}`, { method: 'DELETE' });
+    await fetchGraph();
+  };
+
   const deleteWholeCluster = async (bg: string) => {
     const label = (graph.bucketNames ?? {})[bg] || bg;
     const memberCount = graph.nodes.filter((n) => n.bg === bg).length;
     const ok = window.confirm(
-      `Delete cluster "${label}" and all ${memberCount} people in it? This can't be undone.`,
+      `Permanently delete "${label}" and all ${memberCount} people? This can't be undone.`,
     );
     if (!ok) return;
     setClusterNamePopup(null);
@@ -637,6 +672,25 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
           <div className="crow"><kbd>click</kbd><span>haze → name cluster</span></div>
         </div>
 
+        {(() => {
+          const hiddenBgs = Object.entries(graph.bucketRopes ?? {})
+            .filter(([, v]) => v.hidden)
+            .map(([bg]) => bg);
+          if (hiddenBgs.length === 0) return null;
+          return (
+            <div className="controls-hud" style={{ marginTop: 8 }}>
+              <span className="title">hidden ropes</span>
+              {hiddenBgs.map((bg) => (
+                <div key={bg} className="crow" style={{ cursor: 'pointer' }} onClick={() => patchRope(bg, { meHidden: false })}>
+                  <span style={{ color: bgColors[bg], marginRight: 4 }}>●</span>
+                  <span>{(graph.bucketNames ?? {})[bg] || bg}</span>
+                  <span style={{ marginLeft: 'auto', fontSize: '0.75rem', opacity: 0.6 }}>show</span>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
+
         {createPopup && (
           <div
             className="create-popup"
@@ -764,9 +818,17 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
             <button
               className="cluster-name-delete cluster-name-wipe"
               onMouseDown={(e) => e.preventDefault()}
+              onClick={() => dissolveCluster(clusterNamePopup.bg)}
+            >
+              dissolve cluster
+            </button>
+            <button
+              className="cluster-name-delete cluster-name-wipe"
+              style={{ background: '#6b2020' }}
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => deleteWholeCluster(clusterNamePopup.bg)}
             >
-              delete cluster
+              delete all people
             </button>
           </div>
         )}
@@ -1050,30 +1112,17 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
             </button>
             <button
               className="dd-delete-person"
-              style={{ marginTop: 6, background: '#6b2020' }}
-              onClick={async () => {
-                const count = ropeBucketMembers.length;
-                const ok = window.confirm(
-                  `Delete this cluster and all ${count} ${count === 1 ? 'person' : 'people'} in it? This can't be undone.`,
-                );
-                if (!ok) return;
-                const ids = selectedRope.memberIds;
-                setSelectedRope(null);
-                setGraph((g) => {
-                  const removeSet = new Set(ids);
-                  return {
-                    ...g,
-                    nodes: g.nodes.filter((n) => !removeSet.has(n.id)),
-                    edges: g.edges.filter((e) => !removeSet.has(e.source) && !removeSet.has(e.target)),
-                  };
-                });
-                await Promise.all(ids.map((id) =>
-                  fetch(`/api/people/${id}`, { method: 'DELETE' }),
-                ));
-                await fetchGraph();
-              }}
+              style={{ marginTop: 6 }}
+              onClick={() => dissolveCluster(selectedRope.baseBg)}
             >
-              delete cluster
+              dissolve cluster
+            </button>
+            <button
+              className="dd-delete-person"
+              style={{ marginTop: 6, background: '#6b2020' }}
+              onClick={() => deleteWholeCluster(selectedRope.baseBg)}
+            >
+              delete all people
             </button>
           </div>
         )}
