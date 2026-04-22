@@ -737,9 +737,14 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       const freeByBg: Record<string, SimNode[]> = {};
       for (const n of free) (freeByBg[n.bg] ||= []).push(n);
 
-      // find which component indices are already taken by haze keys
+      // find which component indices are already taken by ACTIVE haze keys.
+      // only hazes with alpha >= 0.08 can capture nodes in Phase 1, so only
+      // those need reserved indices. fading hazes (alpha < 0.08) are harmless
+      // — reusing their index is correct and prevents runaway key accumulation.
       const usedIndices: Record<string, Set<number>> = {};
       for (const key of Object.keys(hazeState)) {
+        const st = hazeState[key];
+        if (!st || st.a < 0.08) continue;
         const base = key.split('#')[0];
         const idx = key.includes('#') ? parseInt(key.split('#')[1]) - 1 : 0;
         (usedIndices[base] ||= new Set()).add(idx);
