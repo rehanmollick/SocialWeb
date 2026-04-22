@@ -57,6 +57,8 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
     tags: string[];
   } | null>(null);
   const [descDraft, setDescDraft] = useState<string>('');
+  const clusterPopupRef = useRef<HTMLDivElement>(null);
+  const [popupExpandedLink, setPopupExpandedLink] = useState<string | null>(null);
 
   const fetchGraph = useCallback(async () => {
     const res = await fetch('/api/graph', { cache: 'no-store' });
@@ -464,6 +466,19 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
   // only custom names — presets intentionally empty so clusters stay unnamed until the user names them.
   const labelFor = (bg: string) => customNames[bg] ?? '';
 
+  const handleSidebarClusterSelect = (bg: string) => {
+    const memberIds = graph.nodes.filter((n) => n.bg === bg).map((n) => n.id);
+    const existing = customNames[bg] ?? '';
+    setPopupExpandedLink(null);
+    setClusterNamePopup({
+      bg,
+      x: window.innerWidth / 2,
+      y: window.innerHeight / 2,
+      value: existing,
+      memberIds,
+    });
+  };
+
   const cls = ['app'];
   if (leftCollapsed) cls.push('left-collapsed');
   if (rightCollapsed) cls.push('right-collapsed');
@@ -495,6 +510,7 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
         collapsed={leftCollapsed}
         onToggle={() => setLeftCollapsed((v) => !v)}
         bucketNames={customNames}
+        onSelectCluster={handleSidebarClusterSelect}
       />
 
       <div className="canvas">
@@ -750,11 +766,11 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
         {clusterNamePopup && (() => {
           const popBg = clusterNamePopup.bg;
           const ropeInfo = (graph.bucketRopes ?? {})[popBg];
+          const meConnected = !(ropeInfo?.hidden);
           const ropeWeight = ropeInfo?.weight ?? 5;
           const existingEdges = (graph.clusterEdges ?? []).filter(
             (e) => e.a === popBg || e.b === popBg,
           );
-          // other clusters to connect to
           const otherClusters: { bg: string; label: string }[] = [];
           const seenBg = new Set<string>();
           for (const n of graph.nodes) {
@@ -767,140 +783,213 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
           const linkable = otherClusters.filter((c) => !alreadyLinked.has(c.bg));
 
           return (
-            <div
-              className="cluster-name-popup"
-              style={{ left: clusterNamePopup.x, top: clusterNamePopup.y }}
-              onMouseDown={(e) => e.stopPropagation()}
-            >
-              <input
-                autoFocus
-                placeholder="name this cluster..."
-                value={clusterNamePopup.value}
-                onChange={(e) =>
-                  setClusterNamePopup((p) => (p ? { ...p, value: e.target.value } : p))
-                }
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') submitClusterName();
-                  if (e.key === 'Escape') setClusterNamePopup(null);
-                }}
-                onBlur={submitClusterName}
-              />
+            <>
+              <div className="cluster-popup-backdrop" onMouseDown={() => submitClusterName()} />
+              <div
+                ref={clusterPopupRef}
+                className="cluster-name-popup"
+                style={{ left: clusterNamePopup.x, top: clusterNamePopup.y }}
+                onMouseDown={(e) => e.stopPropagation()}
+              >
+                <input
+                  autoFocus
+                  placeholder="name this cluster..."
+                  value={clusterNamePopup.value}
+                  onChange={(e) =>
+                    setClusterNamePopup((p) => (p ? { ...p, value: e.target.value } : p))
+                  }
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') submitClusterName();
+                    if (e.key === 'Escape') setClusterNamePopup(null);
+                  }}
+                />
 
-              {/* rope strength slider */}
-              <div className="cluster-popup-section">
-                <label className="cluster-popup-label">connection strength</label>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <input
-                    type="range"
-                    min={0}
-                    max={10}
-                    step={1}
-                    value={ropeWeight}
-                    onChange={async (e) => {
-                      const w = Number(e.target.value);
-                      setGraph((g) => ({
-                        ...g,
-                        bucketRopes: { ...(g.bucketRopes ?? {}), [popBg]: { weight: w, hidden: false } },
-                      }));
-                      await fetch(`/api/buckets/${encodeURIComponent(popBg)}`, {
-                        method: 'PATCH',
-                        headers: { 'content-type': 'application/json' },
-                        body: JSON.stringify({ meWeight: w }),
-                      });
-                    }}
-                    style={{ flex: 1 }}
-                  />
-                  <span className="cluster-popup-value">{ropeWeight}</span>
-                </div>
-              </div>
+                {/* connections */}
+                <div className="cluster-popup-section">
+                  <label className="cluster-popup-label">connections</label>
 
-              {/* cluster-to-cluster connections */}
-              <div className="cluster-popup-section">
-                <label className="cluster-popup-label">linked clusters</label>
-                {existingEdges.map((edge) => {
-                  const other = edge.a === popBg ? edge.b : edge.a;
-                  const otherName = (graph.bucketNames ?? {})[other] || other.slice(0, 8);
-                  return (
-                    <div key={other} className="cluster-link-row">
-                      <span className="cluster-link-name">{otherName}</span>
-                      <span className="cluster-popup-value">{edge.weight}</span>
-                      <button
-                        className="cluster-link-remove"
-                        onMouseDown={(e) => e.preventDefault()}
-                        onClick={async () => {
-                          setGraph((g) => ({
-                            ...g,
-                            clusterEdges: (g.clusterEdges ?? []).filter(
-                              (ce) => !((ce.a === popBg && ce.b === other) || (ce.a === other && ce.b === popBg)),
-                            ),
-                          }));
-                          await fetch('/api/cluster-edges', {
-                            method: 'DELETE',
-                            headers: { 'content-type': 'application/json' },
-                            body: JSON.stringify({ bgA: popBg, bgB: other }),
-                          });
-                        }}
+                  {meConnected ? (
+                    <div>
+                      <div
+                        className={`cluster-link-row${popupExpandedLink === 'me' ? ' expanded' : ''}`}
+                        onClick={() => setPopupExpandedLink(popupExpandedLink === 'me' ? null : 'me')}
+                        style={{ cursor: 'pointer' }}
                       >
-                        ×
-                      </button>
+                        <span className="cluster-link-name">me</span>
+                        <span className="cluster-popup-value">{ropeWeight}</span>
+                        <button
+                          className="cluster-link-remove"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            await patchRope(popBg, { meHidden: true });
+                            setPopupExpandedLink(null);
+                          }}
+                        >
+                          ×
+                        </button>
+                      </div>
+                      {popupExpandedLink === 'me' && (
+                        <div className="cluster-link-slider">
+                          <input
+                            type="range"
+                            min={0}
+                            max={10}
+                            step={1}
+                            value={ropeWeight}
+                            onChange={async (e) => {
+                              const w = Number(e.target.value);
+                              setGraph((g) => ({
+                                ...g,
+                                bucketRopes: { ...(g.bucketRopes ?? {}), [popBg]: { weight: w, hidden: false } },
+                              }));
+                              await fetch(`/api/buckets/${encodeURIComponent(popBg)}`, {
+                                method: 'PATCH',
+                                headers: { 'content-type': 'application/json' },
+                                body: JSON.stringify({ meWeight: w }),
+                              });
+                            }}
+                            style={{ flex: 1 }}
+                          />
+                          <span className="cluster-popup-value">{ropeWeight}</span>
+                        </div>
+                      )}
                     </div>
-                  );
-                })}
-                {existingEdges.length === 0 && (
-                  <div className="cluster-popup-hint">only connected to you</div>
-                )}
-                {linkable.length > 0 && (
-                  <select
-                    className="cluster-link-select"
-                    value=""
-                    onChange={async (e) => {
-                      const targetBg = e.target.value;
-                      if (!targetBg) return;
-                      const newEdge = { a: popBg < targetBg ? popBg : targetBg, b: popBg < targetBg ? targetBg : popBg, weight: 5 };
-                      setGraph((g) => ({
-                        ...g,
-                        clusterEdges: [...(g.clusterEdges ?? []), newEdge],
-                      }));
-                      await fetch('/api/cluster-edges', {
-                        method: 'POST',
-                        headers: { 'content-type': 'application/json' },
-                        body: JSON.stringify({ bgA: popBg, bgB: targetBg, weight: 5 }),
-                      });
-                    }}
-                  >
-                    <option value="">+ link to cluster...</option>
-                    {linkable.map((c) => (
-                      <option key={c.bg} value={c.bg}>{c.label}</option>
-                    ))}
-                  </select>
-                )}
-              </div>
+                  ) : (
+                    <button
+                      className="cluster-link-add"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={async () => {
+                        await patchRope(popBg, { meHidden: false });
+                      }}
+                    >
+                      + connect to me
+                    </button>
+                  )}
 
-              {(graph.bucketNames ?? {})[popBg] && (
+                  {existingEdges.map((edge) => {
+                    const other = edge.a === popBg ? edge.b : edge.a;
+                    const otherName = (graph.bucketNames ?? {})[other] || other.slice(0, 8);
+                    return (
+                      <div key={other}>
+                        <div
+                          className={`cluster-link-row${popupExpandedLink === other ? ' expanded' : ''}`}
+                          onClick={() => setPopupExpandedLink(popupExpandedLink === other ? null : other)}
+                          style={{ cursor: 'pointer' }}
+                        >
+                          <span className="cluster-link-name">{otherName}</span>
+                          <span className="cluster-popup-value">{edge.weight}</span>
+                          <button
+                            className="cluster-link-remove"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              setGraph((g) => ({
+                                ...g,
+                                clusterEdges: (g.clusterEdges ?? []).filter(
+                                  (ce) => !((ce.a === popBg && ce.b === other) || (ce.a === other && ce.b === popBg)),
+                                ),
+                              }));
+                              setPopupExpandedLink(null);
+                              await fetch('/api/cluster-edges', {
+                                method: 'DELETE',
+                                headers: { 'content-type': 'application/json' },
+                                body: JSON.stringify({ bgA: popBg, bgB: other }),
+                              });
+                            }}
+                          >
+                            ×
+                          </button>
+                        </div>
+                        {popupExpandedLink === other && (
+                          <div className="cluster-link-slider">
+                            <input
+                              type="range"
+                              min={0}
+                              max={10}
+                              step={1}
+                              value={edge.weight}
+                              onChange={async (e) => {
+                                const w = Number(e.target.value);
+                                const [a, b] = popBg < other ? [popBg, other] : [other, popBg];
+                                setGraph((g) => ({
+                                  ...g,
+                                  clusterEdges: (g.clusterEdges ?? []).map((ce) =>
+                                    ce.a === a && ce.b === b ? { ...ce, weight: w } : ce
+                                  ),
+                                }));
+                                await fetch('/api/cluster-edges', {
+                                  method: 'PATCH',
+                                  headers: { 'content-type': 'application/json' },
+                                  body: JSON.stringify({ bgA: a, bgB: b, weight: w }),
+                                });
+                              }}
+                              style={{ flex: 1 }}
+                            />
+                            <span className="cluster-popup-value">{edge.weight}</span>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+
+                  {existingEdges.length === 0 && !meConnected && (
+                    <div className="cluster-popup-hint">no connections</div>
+                  )}
+
+                  {linkable.length > 0 && (
+                    <select
+                      className="cluster-link-select"
+                      value=""
+                      onChange={async (e) => {
+                        const targetBg = e.target.value;
+                        if (!targetBg) return;
+                        const newEdge = { a: popBg < targetBg ? popBg : targetBg, b: popBg < targetBg ? targetBg : popBg, weight: 5 };
+                        setGraph((g) => ({
+                          ...g,
+                          clusterEdges: [...(g.clusterEdges ?? []), newEdge],
+                        }));
+                        await fetch('/api/cluster-edges', {
+                          method: 'POST',
+                          headers: { 'content-type': 'application/json' },
+                          body: JSON.stringify({ bgA: popBg, bgB: targetBg, weight: 5 }),
+                        });
+                      }}
+                    >
+                      <option value="">+ link to cluster...</option>
+                      {linkable.map((c) => (
+                        <option key={c.bg} value={c.bg}>{c.label}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                {(graph.bucketNames ?? {})[popBg] && (
+                  <button
+                    className="cluster-name-delete"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => deleteClusterName(popBg)}
+                  >
+                    clear name
+                  </button>
+                )}
                 <button
-                  className="cluster-name-delete"
+                  className="cluster-name-delete cluster-name-wipe"
                   onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => deleteClusterName(popBg)}
+                  onClick={() => dissolveCluster(clusterNamePopup.memberIds, popBg)}
                 >
-                  clear name
+                  dissolve cluster
                 </button>
-              )}
-              <button
-                className="cluster-name-delete cluster-name-wipe"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => dissolveCluster(clusterNamePopup.memberIds, popBg)}
-              >
-                dissolve cluster
-              </button>
-              <button
-                className="cluster-name-delete cluster-name-wipe"
-                style={{ background: '#6b2020' }}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => deleteWholeCluster(clusterNamePopup.memberIds)}
-              >
-                delete all people
-              </button>
-            </div>
+                <button
+                  className="cluster-name-delete cluster-name-wipe"
+                  style={{ background: '#6b2020' }}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => deleteWholeCluster(clusterNamePopup.memberIds)}
+                >
+                  delete all people
+                </button>
+              </div>
+            </>
           );
         })()}
 
