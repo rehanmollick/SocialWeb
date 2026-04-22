@@ -1113,6 +1113,29 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         gLinks.push({ source: s, target: t, weight: e.weight, strength });
       }
 
+      // seed hazes from saved positions so clusters don't fragment on remount.
+      // without this, hazeState is empty on mount → Phase 1 has no hazes to
+      // capture nodes → Phase 2 union-find splits spread-out same-bg groups
+      // into multiple sub-clusters, making one named cluster appear as 2-3.
+      const byBgSeed: Record<string, SimNode[]> = {};
+      for (const n of gNodes) {
+        if (!n.bg) continue;
+        (byBgSeed[n.bg] ||= []).push(n);
+      }
+      for (const [bg, nodes] of Object.entries(byBgSeed)) {
+        if (nodes.length < 2) continue;
+        let cx = 0, cy = 0;
+        for (const n of nodes) { cx += n.x ?? 0; cy += n.y ?? 0; }
+        cx /= nodes.length; cy /= nodes.length;
+        const dists = nodes.map(n => Math.hypot((n.x ?? 0) - cx, (n.y ?? 0) - cy));
+        dists.sort((a, b) => a - b);
+        const maxDist = dists[dists.length - 1];
+        // radius must envelop every node: capture threshold is r * 0.85,
+        // so r = maxDist / 0.85 + margin ensures all nodes are captured.
+        const radius = Math.max(110, maxDist / 0.85 + 30);
+        hazeState[bg] = { x: cx, y: cy, r: radius, a: 0.5 };
+      }
+
       sim.nodes(gNodes);
       sim.alpha(0.1).restart();
     };
