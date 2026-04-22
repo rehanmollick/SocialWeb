@@ -1248,39 +1248,55 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         for (const m of movedNodes) { gcx += m._ax ?? 0; gcy += m._ay ?? 0; }
         gcx /= movedNodes.length; gcy /= movedNodes.length;
 
+        // detect "whole cluster move": if ALL nodes of the majority bg are
+        // in the moved set, keep the original bg — the user is relocating
+        // the entire cluster, not splitting it off.
+        const bgCounts: Record<string, number> = {};
+        for (const m of movedNodes) bgCounts[m.bg] = (bgCounts[m.bg] ?? 0) + 1;
+        const majorBg = Object.entries(bgCounts).sort((a, b) => b[1] - a[1])[0][0];
+        const totalWithMajorBg = gNodes.filter((n) => n.bg === majorBg).length;
+        const movedWithMajorBg = bgCounts[majorBg] ?? 0;
+        const isWholeClusterMove = movedWithMajorBg === totalWithMajorBg;
+
         let groupBg: string | null = null;
-        let bestD2 = Infinity;
-        for (const key of Object.keys(hazeState)) {
-          if (key.includes('#')) continue;
-          const st = hazeState[key];
-          if (!st || st.a < 0.1) continue;
-          const d2 = (st.x - gcx) ** 2 + (st.y - gcy) ** 2;
-          const limit = (st.r * 0.7) ** 2;
-          if (d2 < limit && d2 < bestD2) { bestD2 = d2; groupBg = key; }
-        }
-        if (!groupBg) {
-          // check if centroid is still inside original haze of the majority
-          const bgCounts: Record<string, number> = {};
-          for (const m of movedNodes) bgCounts[m.bg] = (bgCounts[m.bg] ?? 0) + 1;
-          const majorBg = Object.entries(bgCounts).sort((a, b) => b[1] - a[1])[0][0];
-          const ownSt = hazeState[majorBg];
-          const inOwnHaze = ownSt && ownSt.a > 0.1 &&
-            ((gcx - ownSt.x) ** 2 + (gcy - ownSt.y) ** 2) < (ownSt.r * 0.5) ** 2;
-          if (!inOwnHaze) {
-            // check if any moved node is near a non-moved node
-            let nearBg: string | null = null;
-            let nearD2 = LINK_DIST_SQ;
-            for (const m of movedNodes) {
-              const px = m._ax ?? 0, py = m._ay ?? 0;
-              for (const other of gNodes) {
-                if (movedSet.has(other.id)) continue;
-                const dx = (other.x ?? 0) - px;
-                const dy = (other.y ?? 0) - py;
-                const d2 = dx * dx + dy * dy;
-                if (d2 < nearD2) { nearD2 = d2; nearBg = other.bg; }
+
+        if (isWholeClusterMove) {
+          // entire cluster moved — keep original bg, just update the haze
+          groupBg = majorBg;
+          // reseed haze at new centroid so it follows the cluster immediately
+          const st = hazeState[majorBg];
+          if (st) { st.x = gcx; st.y = gcy; }
+          else { hazeState[majorBg] = { x: gcx, y: gcy, r: 110, a: 0.5 }; }
+        } else {
+          let bestD2 = Infinity;
+          for (const key of Object.keys(hazeState)) {
+            if (key.includes('#')) continue;
+            const st = hazeState[key];
+            if (!st || st.a < 0.1) continue;
+            const d2 = (st.x - gcx) ** 2 + (st.y - gcy) ** 2;
+            const limit = (st.r * 0.7) ** 2;
+            if (d2 < limit && d2 < bestD2) { bestD2 = d2; groupBg = key; }
+          }
+          if (!groupBg) {
+            const ownSt = hazeState[majorBg];
+            const inOwnHaze = ownSt && ownSt.a > 0.1 &&
+              ((gcx - ownSt.x) ** 2 + (gcy - ownSt.y) ** 2) < (ownSt.r * 0.5) ** 2;
+            if (!inOwnHaze) {
+              // check if any moved node is near a non-moved node
+              let nearBg: string | null = null;
+              let nearD2 = LINK_DIST_SQ;
+              for (const m of movedNodes) {
+                const px = m._ax ?? 0, py = m._ay ?? 0;
+                for (const other of gNodes) {
+                  if (movedSet.has(other.id)) continue;
+                  const dx = (other.x ?? 0) - px;
+                  const dy = (other.y ?? 0) - py;
+                  const d2 = dx * dx + dy * dy;
+                  if (d2 < nearD2) { nearD2 = d2; nearBg = other.bg; }
+                }
               }
+              groupBg = nearBg ?? `c${Date.now()}`;
             }
-            groupBg = nearBg ?? `c${Date.now()}`;
           }
         }
         if (groupBg) {
