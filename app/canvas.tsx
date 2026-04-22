@@ -232,7 +232,7 @@ type GraphCanvasProps = {
   graph: GraphPayload;
   onSelect?: (node: GraphNode | null) => void;
   onSelectEdge?: (edge: EdgeSelection | null) => void;
-  onClusterClick?: (bg: string, screenX: number, screenY: number) => void;
+  onClusterClick?: (bg: string, screenX: number, screenY: number, memberIds: number[]) => void;
   onConnect?: (aId: number, bId: number) => void;
   onPinToMe?: (id: number) => void;
   onSelectRope?: (sel: RopeSelection | null) => void;
@@ -1851,7 +1851,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         }
       }
       if (hitBg) {
-        onClusterClickRef.current?.(hitBg, ev.clientX, ev.clientY);
+        const members = gNodes.filter((n) => n._liveBg === hitBg).map((n) => n.id);
+        onClusterClickRef.current?.(hitBg, ev.clientX, ev.clientY, members);
         onSelectRef.current?.(null);
         onSelectEdgeRef.current?.(null);
         return;
