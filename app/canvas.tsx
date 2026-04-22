@@ -1209,7 +1209,12 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         m._ay = m.y ?? m.fy ?? 0;
         m.fx = null;
         m.fy = null;
+        // zero accumulated velocity so the node doesn't overshoot
+        m.vx = 0;
+        m.vy = 0;
       }
+      // cool the sim fast so forces don't slide the dropped node around
+      sim.alpha(0.02);
       const oldBgsLosingMembers = new Set<string>();
       const movedSet = new Set(movedNodes.map((m) => m.id));
       const isGroup = movedNodes.length > 1;
@@ -1418,7 +1423,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         dragMoved = false;
         dragStartX = event.x;
         dragStartY = event.y;
-        if (!event.active) sim.alphaTarget(0.25).restart();
+        if (!event.active) sim.alphaTarget(0.08).restart();
         const n = event.subject as SimNode;
         n.fx = n.x;
         n.fy = n.y;
@@ -1460,6 +1465,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         } else {
           n.fx = null;
           n.fy = null;
+          n.vx = 0;
+          n.vy = 0;
           onSelectRef.current?.({ id: n.id, name: n.name, bg: n.bg, strength: n.s, tags: n.tags, description: n.description });
           onSelectEdgeRef.current?.(null);
         }
