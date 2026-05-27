@@ -256,7 +256,34 @@ Two endpoints:
 
 ---
 
-## Files of record
+## Rendering performance
+
+The decoration layer is large: ~4000 stars, 900 dust motes, ~150 galaxies,
+100 planets, 700 asteroids, 9 asteroid belts (~2500 rocks), 36 comets, etc.
+Drawing all of them every frame was the cause of the laggy drag/zoom/pan.
+
+**Every decoration loop in the draw function must cull by the view rect**
+before doing any work. The helpers `inView(x, y, margin)` and `ringInView(r)`
+are computed once per frame at the top of `draw` and applied as:
+
+```ts
+for (const item of items) {
+  if (!inView(item.x, item.y, item.radius)) continue;
+  // draw...
+}
+```
+
+Asteroid belts: cull the whole belt by `(belt.cx, belt.cy)` ± `belt.rOuter`
+first, then cull individual rocks. This saves ~280 arcs per culled belt.
+
+Orbiters: cull by `ringInView(orbit.radius)` first (skip entire orbit ring
+if it doesn't intersect the view), then by per-orbiter position.
+
+Don't cull: shooting stars (cheap, transient), people nodes, edges, ropes,
+the canvas background gradient.
+
+When adding new decoration, the rule is: **if you're drawing > 20 of
+something per frame, cull it.**
 
 | File | Role |
 |---|---|

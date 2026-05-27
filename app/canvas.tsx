@@ -2275,6 +2275,28 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       ctx.translate(currentTransform.x, currentTransform.y);
       ctx.scale(currentTransform.k, currentTransform.k);
 
+      // ===== viewport bounds (world coords) =====
+      // every decoration loop below short-circuits with inView() so we don't
+      // touch ~6000 stars/galaxies/asteroids that aren't on screen. THE single
+      // biggest perf win when zoomed in — was the cause of the laggy drag/pan
+      // the user reported.
+      const cssW = canvas.width / dpr;
+      const cssH = canvas.height / dpr;
+      const viewLeft = -currentTransform.x / currentTransform.k;
+      const viewTop = -currentTransform.y / currentTransform.k;
+      const viewRight = (cssW - currentTransform.x) / currentTransform.k;
+      const viewBottom = (cssH - currentTransform.y) / currentTransform.k;
+      const inView = (x: number, y: number, margin = 0): boolean =>
+        x + margin >= viewLeft &&
+        x - margin <= viewRight &&
+        y + margin >= viewTop &&
+        y - margin <= viewBottom;
+      // for ring-shaped decorations (orbit rings, astral rings) centered at
+      // (0,0): true iff the ring's bounding box [-r,r]² overlaps the view rect.
+      const ringInView = (radius: number): boolean =>
+        -radius <= viewRight && radius >= viewLeft &&
+        -radius <= viewBottom && radius >= viewTop;
+
       // ===== live cluster aggregation =====
       // components were already assigned to n._liveBg at the top of draw.
       // here we just aggregate centroids and spread from the post-tick
@@ -2421,6 +2443,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
       for (const neb of nebulae) {
+        if (!inView(neb.x, neb.y, neb.radius * 1.05)) continue;
         const pulse = 0.85 + 0.15 * Math.sin(neb.pulsePhase + tSec * neb.pulseSpeed);
         const r = neb.radius * pulse;
         const g = ctx.createRadialGradient(neb.x, neb.y, 0, neb.x, neb.y, r);
@@ -2438,6 +2461,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
       for (const gx of [...distantGiants, ...galaxies]) {
+        if (!inView(gx.x, gx.y, gx.rx * 1.95)) continue;
         ctx.save();
         ctx.translate(gx.x, gx.y);
         ctx.rotate(gx.rot + tSec * 0.015);
@@ -2545,6 +2569,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
       for (const mg of miniGalaxies) {
+        if (!inView(mg.x, mg.y, mg.size * 1.65)) continue;
         ctx.save();
         ctx.translate(mg.x, mg.y);
         ctx.rotate(mg.rot + tSec * 0.03);
@@ -2647,6 +2672,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       ctx.save();
       ctx.globalCompositeOperation = 'source-over';
       for (const a of asteroids) {
+        if (!inView(a.x, a.y, a.size + 1)) continue;
         ctx.save();
         ctx.translate(a.x, a.y);
         ctx.rotate(a.rot + tSec * 0.05);
@@ -2672,10 +2698,15 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       ctx.save();
       ctx.globalCompositeOperation = 'source-over';
       for (const belt of asteroidBelts) {
+        // belt bbox: center (belt.cx, belt.cy) ± belt.rOuter. skip if entire
+        // belt is outside view — saves ~280 rock arcs per culled belt.
+        const beltExtent = belt.rOuter + 2;
+        if (!inView(belt.cx, belt.cy, beltExtent)) continue;
         for (const rock of belt.rocks) {
           const ang = rock.angle + tSec * 0.008;
           const x = belt.cx + Math.cos(ang) * rock.rad;
           const y = belt.cy + Math.sin(ang) * rock.rad;
+          if (!inView(x, y, rock.size + 1)) continue;
           ctx.fillStyle = `rgba(170,160,150,${rock.alpha})`;
           ctx.beginPath();
           ctx.arc(x, y, rock.size, 0, Math.PI * 2);
@@ -2687,6 +2718,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       // ===== planets =====
       ctx.save();
       for (const p of planets) {
+        if (!inView(p.x, p.y, p.radius * 3.1)) continue;
         // soft glow halo
         const halo = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.radius * 3);
         halo.addColorStop(0, hexToRgba(p.tint, 0.12 * p.glow));
@@ -2734,6 +2766,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       // ===== black holes =====
       ctx.save();
       for (const bh of blackHoles) {
+        if (!inView(bh.x, bh.y, bh.radius * 2.5)) continue;
         const spin = bh.rot + tSec * bh.spinSpeed;
         // accretion disk glow
         ctx.globalCompositeOperation = 'lighter';
@@ -2806,6 +2839,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       // ===== dust motes =====
       ctx.save();
       for (const d of dustMotes) {
+        if (!inView(d.x, d.y, 2)) continue;
         ctx.fillStyle = `rgba(220,220,240,${d.alpha})`;
         ctx.beginPath();
         ctx.arc(d.x, d.y, d.size / Math.max(currentTransform.k, 0.5), 0, Math.PI * 2);
@@ -2816,6 +2850,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       // ===== twinkle stars =====
       ctx.save();
       for (const s of twinkleStars) {
+        if (!inView(s.x, s.y, 3)) continue;
         const tw = 0.5 + 0.5 * Math.sin(s.phase + tSec * s.speed);
         const a = s.baseAlpha * tw;
         const sz = s.size / Math.max(currentTransform.k, 0.5);
@@ -2890,21 +2925,27 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       ctx.strokeStyle = 'rgba(255,255,255,0.06)';
       ctx.lineWidth = 0.5 / currentTransform.k;
       for (const r of [90, 180, 270, 360, 460, 570]) {
+        if (!ringInView(r)) continue;
         ctx.beginPath();
         ctx.arc(0, 0, r, 0, Math.PI * 2);
         ctx.stroke();
       }
       ctx.setLineDash([2 / currentTransform.k, 6 / currentTransform.k]);
       ctx.strokeStyle = 'rgba(255,255,255,0.07)';
-      ctx.beginPath();
-      ctx.arc(0, 0, 690, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.arc(0, 0, 820, 0, Math.PI * 2);
-      ctx.stroke();
+      if (ringInView(690)) {
+        ctx.beginPath();
+        ctx.arc(0, 0, 690, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+      if (ringInView(820)) {
+        ctx.beginPath();
+        ctx.arc(0, 0, 820, 0, Math.PI * 2);
+        ctx.stroke();
+      }
       // outer-rim rings — only visible when zoomed out
       ctx.strokeStyle = 'rgba(255,255,255,0.05)';
       for (const r of [1100, 1500, 1950, 2500, 3100, 3900, 4900, 6200, 7800, 9800, 12500]) {
+        if (!ringInView(r)) continue;
         ctx.beginPath();
         ctx.arc(0, 0, r, 0, Math.PI * 2);
         ctx.stroke();
@@ -2954,8 +2995,11 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       // ===== orbiters =====
       ctx.save();
       for (const o of orbiters) {
+        // skip entire orbit ring if it doesn't intersect the view at all
+        if (!ringInView(o.radius)) continue;
         const ox = Math.cos(o.theta) * o.radius;
         const oy = Math.sin(o.theta) * o.radius;
+        if (!inView(ox, oy, o.size + 4)) continue;
         const ox2 = Math.cos(o.theta - o.trail) * o.radius;
         const oy2 = Math.sin(o.theta - o.trail) * o.radius;
         const tg = ctx.createLinearGradient(ox2, oy2, ox, oy);
