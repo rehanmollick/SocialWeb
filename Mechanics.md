@@ -70,6 +70,7 @@ Runs every tick before sim integration. Outputs each node's `_liveBg`.
 |---|---|---|
 | `LINK_DIST` | 260 wu | Two same-bg nodes within this distance belong to the same component. Was 190 — bumped because lattice spacing grew. |
 | `MERGE_RADIUS` | 320 wu | After Phase 2, two same-bg components whose centroids are within this merge back. |
+| `ABSORB_RADIUS` | 600 wu | Used by dissolve: a dissolving node joins the nearest other cluster within this range, else falls back to `online`. |
 | Haze capture | `d < 0.85 * st.r` | Phase 1 threshold. |
 | Capturing haze | `st.a >= 0.08` | Only visible hazes capture. |
 
@@ -168,16 +169,53 @@ All moved nodes in a group get the **same** final bg.
 
 | | Dissolve | Delete |
 |---|---|---|
-| API | PATCH each person `bg='online'`, DELETE `/api/buckets/{baseBg}` | DELETE `/api/buckets/{baseBg}?withPeople=1` |
-| People | Preserved, moved to `online` cluster | Permanently deleted |
+| API | PATCH each person `bg=<absorption-target>`, DELETE `/api/buckets/{baseBg}` | DELETE on each person, DELETE `/api/buckets/{baseBg}` |
+| People | Preserved, each absorbed by nearest cluster (or → `online`) | Permanently deleted |
 | Edges | Preserved | Cascaded delete |
 | Cluster name | Removed | Removed |
-| Saved positions | Cleared (so the moved nodes lay out fresh in `online`) | N/A |
+| Saved positions | Cleared (so the moved nodes lay out fresh in their new cluster) | N/A |
 | Canvas haze cleanup | Wipe all `baseBg` and `baseBg#N` entries from `hazeState` | Same |
 
 **Both flows operate on the FULL base-bg member set**, not the per-sub-cluster
 member set. AppPage looks up `g.nodes.filter(n => n.bg === baseBg)` before
-calling the API, ignoring whatever subset the canvas passed in.
+calling the API, ignoring whatever subset the canvas passed in. If that returns
+empty for any reason (stale popup state, etc.), it falls back to the popup's
+memberIds as a safety net.
+
+### Absorption rule (dissolve only)
+
+When a cluster dissolves, each member is not just dumped into `online`. The
+canvas's `absorbDissolvingNodes(baseBg, ids)` API picks a destination per node:
+
+1. **For each dissolving node**: scan visible-enough haze centers
+   (`a >= 0.10`, base keys only — sub-keys excluded). Exclude the dissolving
+   cluster's own base key.
+2. **Pick the nearest center within `ABSORB_RADIUS = 600 wu`**. That cluster
+   becomes the node's new bg.
+3. **If no candidate is within range**, the node falls back to `bg='online'`.
+
+This means dissolving a cluster sitting amid other clusters causes its
+members to scatter into those neighbors, not flock back to the `online`
+default. Dissolving an isolated cluster sends everyone to `online` as before.
+
+`ABSORB_RADIUS = 600` is intentionally larger than `LINK_DIST = 260` so the
+rule is "if there's a real haze in the neighborhood, join it" rather than
+"only if you're already touching it."
+
+---
+
+## applyGraph — pin/unpin invariant
+
+When the server sends a node with `x/y = null` (e.g., after dissolve cleared
+its position), `applyGraph` MUST unpin the corresponding SimNode (`_pinned =
+false`, `_ax = _ay = undefined`, `fx = fy = null`). Otherwise `layoutBucket`
+filters the node out of its placement pass (it only places `!_pinned` nodes)
+and the node stays glued to its old position even though its `bg` changed —
+the "dissolve does nothing visually" bug.
+
+The general rule: `_pinned` is sticky across re-renders ONLY as long as a
+saved position is supplied. A null position is the server's signal to release
+the anchor.
 
 ---
 

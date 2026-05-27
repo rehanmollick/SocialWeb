@@ -264,27 +264,45 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
     await fetchGraph();
   };
 
-  const dissolveCluster = async (_ids: number[], bg: string) => {
-    // canonical source of truth is the persistent bg field. _ids was filtered
-    // by _liveBg in older code which could leave behind sub-cluster orphans —
-    // we now always operate on every node whose n.bg === baseBg. see
-    // Mechanics.md "named vs unnamed clusters / dissolve vs delete".
+  const dissolveCluster = async (popupIds: number[], bg: string) => {
     const baseBg = bg.split('#')[0];
-    const fullIds = graph.nodes.filter((n) => n.bg === baseBg).map((n) => n.id);
-    if (fullIds.length === 0) return;
+    // canonical: every node whose persistent bg matches baseBg. fall back to
+    // popupIds if for some reason graph state is empty (e.g., popup is from a
+    // stale render). either way we always operate on the FULL set, never a
+    // sub-cluster slice. see Mechanics.md.
+    const fromGraph = graph.nodes.filter((n) => n.bg === baseBg).map((n) => n.id);
+    const fullIds = fromGraph.length > 0 ? fromGraph : popupIds;
+    console.log('[dissolve]', { baseBg, fromGraphCount: fromGraph.length, popupCount: popupIds.length, fullIds });
+    if (fullIds.length === 0) {
+      console.warn('[dissolve] no members found for', baseBg, '— aborting');
+      return;
+    }
     const ok = window.confirm(
-      `Dissolve this cluster? The ${fullIds.length} ${fullIds.length === 1 ? 'person' : 'people'} will move to the default group.`,
+      `Dissolve this cluster? The ${fullIds.length} ${fullIds.length === 1 ? 'person' : 'people'} will be absorbed by the nearest cluster (or move to the default group if none is near).`,
     );
     if (!ok) return;
     setClusterNamePopup(null);
     setSelectedRope(null);
-    // wipe ghost hazes for this baseBg AND any sub-keys (baseBg#N) immediately
-    // so the user sees the cluster vanish, not slowly fade for ~1 second.
+
+    // per-node absorption: for each dissolving node, find the nearest visible
+    // cluster center (other than the dissolving one) within ABSORB_RADIUS. if
+    // found, that node joins that cluster. otherwise it falls back to 'online'.
+    // see Mechanics.md "dissolve vs delete / absorption rules".
+    const absorption = canvasApiRef.current?.absorbDissolvingNodes(baseBg, fullIds) ?? {};
+
+    // wipe ghost hazes BEFORE the state update so computeLiveComponents doesn't
+    // recreate sub-keys on the next tick while the new bg assignments propagate.
     canvasApiRef.current?.wipeHazeForBg(baseBg);
+
+    const reassignFor = (id: number): string => absorption[id] ?? 'online';
     const idSet = new Set(fullIds);
     setGraph((g) => ({
       ...g,
-      nodes: g.nodes.map((n) => idSet.has(n.id) ? { ...n, bg: 'online', x: null, y: null } : n),
+      nodes: g.nodes.map((n) =>
+        idSet.has(n.id)
+          ? { ...n, bg: reassignFor(n.id), x: null, y: null }
+          : n,
+      ),
       bucketNames: (() => { const next = { ...(g.bucketNames ?? {}) }; delete next[baseBg]; return next; })(),
     }));
     await Promise.all([
@@ -292,7 +310,7 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
         fetch(`/api/people/${id}`, {
           method: 'PATCH',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ bg: 'online', clearPosition: true }),
+          body: JSON.stringify({ bg: reassignFor(id), clearPosition: true }),
         }),
       ),
       fetch(`/api/buckets/${encodeURIComponent(baseBg)}`, { method: 'DELETE' }),

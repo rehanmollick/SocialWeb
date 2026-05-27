@@ -250,7 +250,15 @@ type GraphCanvasProps = {
 };
 
 export type CanvasApi = {
+  // immediately zero out hazeState entries for baseBg + baseBg#N so a
+  // dissolve/delete doesn't leave ghost hazes fading for ~60 frames.
   wipeHazeForBg: (baseBg: string) => void;
+  // for each id in the dissolving set, return the bg it should join. uses
+  // current world positions + live hazeState. falls back to 'online' if no
+  // other cluster is within ABSORB_RADIUS. excludes the dissolving baseBg
+  // itself (and its sub-keys) from candidate destinations. returns a map
+  // { [id]: destinationBg }; ids absent from the map default to 'online'.
+  absorbDissolvingNodes: (dissolvingBaseBg: string, ids: number[]) => Record<number, string>;
 };
 
 export type RopeSelection = { bg: string; baseBg: string; memberIds: number[] };
@@ -1118,6 +1126,16 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
               ex.y = n.y as number;
             }
           } else {
+            // server explicitly cleared the position (e.g., dissolve flow).
+            // release the anchor so layoutBucket can re-place the node in
+            // its new bucket — otherwise _pinned=true makes it skip the
+            // node and it stays stuck at the old position. this was the
+            // "dissolve does nothing visually" bug.
+            ex._pinned = false;
+            ex._ax = undefined;
+            ex._ay = undefined;
+            ex.fx = null;
+            ex.fy = null;
             freshlyLaidOut.push(n.id);
           }
         } else {
@@ -2115,8 +2133,47 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         }
       }
     };
+    // distance within which a dissolving node gets absorbed by a nearby cluster
+    // instead of falling back to 'online'. larger than LINK_DIST so the rule is
+    // "if there's a real haze in the neighborhood, join it". see Mechanics.md.
+    const ABSORB_RADIUS_SQ = 600 * 600;
+    const absorbDissolvingNodes = (
+      dissolvingBaseBg: string,
+      ids: number[],
+    ): Record<number, string> => {
+      const out: Record<number, string> = {};
+      const idSet = new Set(ids);
+      // candidate destinations: visible-enough hazes whose base bg is not the
+      // dissolving one. take only base keys (skip bg#N sub-keys).
+      const candidates: Array<{ bg: string; x: number; y: number }> = [];
+      for (const key of Object.keys(hazeState)) {
+        if (key.includes('#')) continue;
+        if (key === dissolvingBaseBg) continue;
+        const st = hazeState[key];
+        if (!st || st.a < 0.1) continue;
+        candidates.push({ bg: key, x: st.x, y: st.y });
+      }
+      for (const n of gNodes) {
+        if (!idSet.has(n.id)) continue;
+        const nx = n.x ?? 0;
+        const ny = n.y ?? 0;
+        let bestBg: string | null = null;
+        let bestD2 = ABSORB_RADIUS_SQ;
+        for (const c of candidates) {
+          const dx = c.x - nx;
+          const dy = c.y - ny;
+          const d2 = dx * dx + dy * dy;
+          if (d2 < bestD2) {
+            bestD2 = d2;
+            bestBg = c.bg;
+          }
+        }
+        if (bestBg) out[n.id] = bestBg;
+      }
+      return out;
+    };
     runtimeRef.current = { canvas, wrap, zoom, gNodes, applyGraph, wipeHazeForBg };
-    if (apiRef) apiRef.current = { wipeHazeForBg };
+    if (apiRef) apiRef.current = { wipeHazeForBg, absorbDissolvingNodes };
 
     // initial seed from whatever graph was present at mount
     applyGraph(graphRef.current);
