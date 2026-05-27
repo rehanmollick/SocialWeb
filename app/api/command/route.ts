@@ -14,6 +14,9 @@ import {
   disconnectCluster,
   pinToMe,
   unpinFromMe,
+  createPerson,
+  createCluster,
+  createTestCluster,
   getGraphSnapshot,
   type ToolResult,
 } from '@/lib/commands';
@@ -25,6 +28,7 @@ const SYSTEM_BASE = `You are the brain of a personal social-memory graph. The us
 
 - Journal / free-form note → call log_thought with the raw text. This extracts people automatically and strengthens connections.
 - Direct instructions like "connect sarah and jess strongly", "make alex high agency", "rename sf to bay area crew", "bump mike to 9", "delete jordan", "interconnect everyone in the climb cluster" → call the matching tool. You may call multiple tools in one turn.
+- Creation requests like "add a person named X", "make a new cluster called Y", "fill a test cluster with 10 random people" → call create_person, create_cluster, or create_test_cluster. NEVER tell the user you can't create — these tools exist.
 
 Clusters have internal bucket ids. Presets: plano, ut, allen, sf, family, climb, online. User-created clusters have ids like "c1776725483571". The user may refer to a cluster by its custom display name — match it to the bucket id from the snapshot below.
 Strength scale: 0 (no connection) to 10 (inseparable). Default connection weight when unspecified: 3 for "connect", 6 for "connect strongly", 8 for "very strong".
@@ -187,6 +191,51 @@ const tools: Anthropic.Tool[] = [
       required: ['name'],
     },
   },
+  {
+    name: 'create_person',
+    description:
+      'Create a brand new person. Use for "add a person named X" or when seeding a person who is not in the graph yet. Defaults: bg="online", strength=5, tags=[]. If you want to put them in an existing cluster, pass that bucket id as bg.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        bg: { type: 'string', description: 'Bucket id (defaults to online)' },
+        strength: { type: 'number' },
+        tags: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'create_cluster',
+    description:
+      'Create a new named cluster. Optionally pre-populate it with a list of people (created on the fly). Use for "make a cluster called Y" or "make a cluster Y with alex, jordan, sam in it".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Display name for the cluster' },
+        members: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional names of people to create in the new cluster',
+        },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'create_test_cluster',
+    description:
+      'Create a named cluster and fill it with N randomly-named test people (default 10, max 50). Use for "make a test cluster with 10 random people" or any seed-data request. Names come from a built-in bank so they look plausible.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        name: { type: 'string' },
+        count: { type: 'number', description: 'How many people to generate (default 10, max 50)' },
+      },
+      required: ['name'],
+    },
+  },
 ];
 
 async function runTool(name: string, input: Record<string, unknown>): Promise<ToolResult> {
@@ -222,6 +271,22 @@ async function runTool(name: string, input: Record<string, unknown>): Promise<To
       return pinToMe(s('name'));
     case 'unpin_from_me':
       return unpinFromMe(s('name'));
+    case 'create_person': {
+      const tagsRaw = input['tags'];
+      const tags = Array.isArray(tagsRaw)
+        ? tagsRaw.filter((t): t is string => typeof t === 'string')
+        : [];
+      return createPerson(s('name'), s('bg') || 'online', n('strength', 5), tags);
+    }
+    case 'create_cluster': {
+      const membersRaw = input['members'];
+      const members = Array.isArray(membersRaw)
+        ? membersRaw.filter((m): m is string => typeof m === 'string')
+        : [];
+      return createCluster(s('name'), members);
+    }
+    case 'create_test_cluster':
+      return createTestCluster(s('name'), n('count', 10));
     default:
       return { ok: false, message: `unknown tool ${name}` };
   }

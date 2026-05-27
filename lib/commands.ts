@@ -223,6 +223,85 @@ export async function renameCluster(bg: string, name: string): Promise<ToolResul
   return { ok: true, message: `${bg} renamed → "${clean}"` };
 }
 
+export async function createPerson(
+  name: string,
+  bg: string = 'online',
+  strength: number = 5,
+  tags: string[] = [],
+): Promise<ToolResult> {
+  const clean = name.trim();
+  if (!clean) return { ok: false, message: 'empty name' };
+  const existing = await findPerson(clean);
+  if (existing) return { ok: false, message: `${clean} already exists` };
+  const now = Date.now();
+  await db.insert(schema.people).values({
+    name: clean,
+    bg,
+    strength: Math.max(0, Math.min(10, Math.floor(strength))),
+    tags: JSON.stringify(tags),
+    createdAt: now,
+    updatedAt: now,
+  });
+  return { ok: true, message: `created ${clean} in ${bg}` };
+}
+
+export async function createCluster(
+  name: string,
+  members: string[] = [],
+): Promise<ToolResult> {
+  const clean = name.trim();
+  if (!clean) return { ok: false, message: 'empty cluster name' };
+  // generate a fresh bg id so two clusters can share a display name if user wants
+  const bg = `c${Date.now()}`;
+  await db.insert(schema.bucketNames).values({ bg, name: clean });
+  let created = 0;
+  for (const m of members) {
+    const r = await createPerson(m, bg, 5, []);
+    if (r.ok) created++;
+  }
+  return {
+    ok: true,
+    message:
+      members.length > 0
+        ? `created cluster "${clean}" with ${created}/${members.length} people`
+        : `created empty cluster "${clean}"`,
+  };
+}
+
+// small bank of plausible-sounding first names for test/seed flows. lowercase
+// so casing stays consistent with user-entered names.
+const TEST_NAMES = [
+  'aiden', 'bella', 'caleb', 'dahlia', 'ezra', 'fiona', 'gideon', 'hazel',
+  'isaac', 'juno', 'kai', 'luna', 'milo', 'nora', 'oscar', 'penny',
+  'quinn', 'ruby', 'silas', 'tess', 'umi', 'vera', 'wes', 'xio',
+  'yara', 'zane', 'arlo', 'briar', 'cleo', 'dax', 'eli', 'finn',
+  'grace', 'hugo', 'ivy', 'jude', 'knox', 'leo', 'maya', 'nico',
+];
+
+export async function createTestCluster(
+  name: string,
+  count: number = 10,
+): Promise<ToolResult> {
+  const clean = name.trim();
+  if (!clean) return { ok: false, message: 'empty cluster name' };
+  const n = Math.max(1, Math.min(50, Math.floor(count)));
+  // pick n unique names, avoiding any name already taken by an existing person
+  const taken = new Set(
+    (await db.query.people.findMany()).map((p) => p.name.toLowerCase()),
+  );
+  const pool = TEST_NAMES.filter((tn) => !taken.has(tn));
+  const shuffled = [...pool].sort(() => Math.random() - 0.5);
+  const picks: string[] = [];
+  for (let i = 0; i < n; i++) {
+    if (shuffled[i]) {
+      picks.push(shuffled[i][0].toUpperCase() + shuffled[i].slice(1));
+    } else {
+      picks.push(`Test${Date.now().toString().slice(-4)}${i}`);
+    }
+  }
+  return createCluster(clean, picks);
+}
+
 export async function deletePerson(name: string): Promise<ToolResult> {
   const p = await findPerson(name);
   if (!p) return { ok: false, message: 'person not found' };

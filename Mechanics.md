@@ -245,12 +245,17 @@ the anchor.
 
 Two endpoints:
 
-- `POST /api/command` — sends user text to Claude Haiku with 12 tools
-  (log_thought, connect_people, disconnect_people, add_tag, remove_tag,
-  set_strength, set_background, rename_cluster, delete_person,
-  connect_cluster, disconnect_cluster, pin_to_me, unpin_from_me).
-  Up to 4 tool-calling turns per request. Claude sees the full graph
-  snapshot.
+- `POST /api/command` — sends user text to Claude Haiku with 16 tools:
+  - **Edit existing graph**: `connect_people`, `disconnect_people`, `add_tag`,
+    `remove_tag`, `set_strength`, `set_background`, `rename_cluster`,
+    `connect_cluster`, `disconnect_cluster`, `pin_to_me`, `unpin_from_me`,
+    `delete_person`
+  - **Create**: `create_person`, `create_cluster`, `create_test_cluster`
+    (named cluster pre-filled with N random people from a name bank, max 50)
+  - **Journal**: `log_thought` (auto-extracts mentioned people)
+  Up to 4 tool-calling turns per request. Claude sees the full graph snapshot.
+  The system prompt explicitly forbids "I can't create" responses — those
+  tools exist.
 - `POST /api/ask` — Q&A over people + recent journal entries. Returns
   referenced people for highlighting.
 
