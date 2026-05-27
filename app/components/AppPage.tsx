@@ -9,6 +9,7 @@ import GraphCanvas, {
   type EdgeSelection,
   type RopeSelection,
   type ClusterEdgeSelection,
+  type CanvasApi,
 } from '../canvas';
 
 const TAG_KEYS = ['highagency', 'highsignal', 'interesting', 'fun', 'friends', 'important', 'helpful', 'boring'] as const;
@@ -28,6 +29,7 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
   const [selectedClusterEdge, setSelectedClusterEdge] = useState<ClusterEdgeSelection | null>(null);
   const [focusId, setFocusId] = useState<number | null>(null);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
+  const canvasApiRef = useRef<CanvasApi | null>(null);
   const [rightCollapsed, setRightCollapsed] = useState(false);
   const [input, setInput] = useState('');
   const cmdInputRef = useRef<HTMLTextAreaElement>(null);
@@ -262,53 +264,64 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
     await fetchGraph();
   };
 
-  const dissolveCluster = async (ids: number[], bg: string) => {
-    if (ids.length === 0) return;
+  const dissolveCluster = async (_ids: number[], bg: string) => {
+    // canonical source of truth is the persistent bg field. _ids was filtered
+    // by _liveBg in older code which could leave behind sub-cluster orphans —
+    // we now always operate on every node whose n.bg === baseBg. see
+    // Mechanics.md "named vs unnamed clusters / dissolve vs delete".
+    const baseBg = bg.split('#')[0];
+    const fullIds = graph.nodes.filter((n) => n.bg === baseBg).map((n) => n.id);
+    if (fullIds.length === 0) return;
     const ok = window.confirm(
-      `Dissolve this cluster? The ${ids.length} ${ids.length === 1 ? 'person' : 'people'} will move to the default group.`,
+      `Dissolve this cluster? The ${fullIds.length} ${fullIds.length === 1 ? 'person' : 'people'} will move to the default group.`,
     );
     if (!ok) return;
     setClusterNamePopup(null);
     setSelectedRope(null);
-    const idSet = new Set(ids);
+    // wipe ghost hazes for this baseBg AND any sub-keys (baseBg#N) immediately
+    // so the user sees the cluster vanish, not slowly fade for ~1 second.
+    canvasApiRef.current?.wipeHazeForBg(baseBg);
+    const idSet = new Set(fullIds);
     setGraph((g) => ({
       ...g,
       nodes: g.nodes.map((n) => idSet.has(n.id) ? { ...n, bg: 'online', x: null, y: null } : n),
-      bucketNames: (() => { const next = { ...(g.bucketNames ?? {}) }; delete next[bg]; return next; })(),
+      bucketNames: (() => { const next = { ...(g.bucketNames ?? {}) }; delete next[baseBg]; return next; })(),
     }));
     await Promise.all([
-      // move each person to 'online' and clear their saved position
-      ...ids.map((id) =>
+      ...fullIds.map((id) =>
         fetch(`/api/people/${id}`, {
           method: 'PATCH',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ bg: 'online', clearPosition: true }),
         }),
       ),
-      // delete the bucket name + rope metadata
-      fetch(`/api/buckets/${encodeURIComponent(bg)}`, { method: 'DELETE' }),
+      fetch(`/api/buckets/${encodeURIComponent(baseBg)}`, { method: 'DELETE' }),
     ]);
     await fetchGraph();
   };
 
-  const deleteWholeCluster = async (ids: number[]) => {
-    if (ids.length === 0) return;
+  const deleteWholeCluster = async (_ids: number[], bg: string) => {
+    const baseBg = bg.split('#')[0];
+    const fullIds = graph.nodes.filter((n) => n.bg === baseBg).map((n) => n.id);
+    if (fullIds.length === 0) return;
     const ok = window.confirm(
-      `Permanently delete ${ids.length} ${ids.length === 1 ? 'person' : 'people'}? This can't be undone.`,
+      `Permanently delete ${fullIds.length} ${fullIds.length === 1 ? 'person' : 'people'}? This can't be undone.`,
     );
     if (!ok) return;
     setClusterNamePopup(null);
-    const idSet = new Set(ids);
+    canvasApiRef.current?.wipeHazeForBg(baseBg);
+    const idSet = new Set(fullIds);
     setGraph((g) => ({
       ...g,
       nodes: g.nodes.filter((n) => !idSet.has(n.id)),
       edges: g.edges.filter((e) => !idSet.has(e.source) && !idSet.has(e.target)),
+      bucketNames: (() => { const next = { ...(g.bucketNames ?? {}) }; delete next[baseBg]; return next; })(),
     }));
     setSelected(null);
     setSelectedEdge(null);
     setSelectedRope(null);
     setSelectedClusterEdge(null);
-    await Promise.all(ids.map((id) =>
+    await Promise.all(fullIds.map((id) =>
       fetch(`/api/people/${id}`, { method: 'DELETE' }),
     ));
     await fetchGraph();
@@ -576,6 +589,7 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
         </div>
 
         <GraphCanvas
+          apiRef={canvasApiRef}
           graph={graph}
           onSelect={(n) => {
             setSelected(n);
@@ -671,6 +685,7 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
           <div className="crow"><kbd>⇧</kbd>+<kbd>drag</kbd><span>connect 2 dots</span></div>
           <div className="crow"><kbd>⌥</kbd>+<kbd>click</kbd><span>new dot</span></div>
           <div className="crow"><kbd>⌘</kbd>+<kbd>drag</kbd><span>box select</span></div>
+          <div className="crow"><kbd>C</kbd>+<kbd>wheel</kbd><span>spread / contract selection</span></div>
           <div className="crow"><kbd>wheel</kbd>/<kbd>pinch</kbd><span>zoom</span></div>
           <div className="crow"><kbd>click</kbd><span>haze → name cluster</span></div>
         </div>
@@ -728,6 +743,8 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
             <div className="cp-tags">
               {TAG_KEYS.map((t) => {
                 const active = createPopup.tags.includes(t);
+                const isHighSignal = t === 'highsignal';
+                const swatchColor = isHighSignal ? '#dde6f5' : tagColors[t] ?? '#8fc08f';
                 return (
                   <span
                     key={t}
@@ -745,10 +762,16 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
                     style={{
                       cursor: 'pointer',
                       opacity: active ? 1 : 0.35,
-                      borderColor: active ? tagColors[t] : 'transparent',
+                      borderColor: active ? swatchColor : 'transparent',
                     }}
                   >
-                    <i style={{ background: tagColors[t] ?? '#8fc08f' }} />
+                    <i
+                      style={
+                        isHighSignal
+                          ? { background: 'transparent', border: `1.2px solid ${swatchColor}`, boxSizing: 'border-box' }
+                          : { background: swatchColor }
+                      }
+                    />
                     {t}
                   </span>
                 );
@@ -984,7 +1007,7 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
                   className="cluster-name-delete cluster-name-wipe"
                   style={{ background: '#6b2020' }}
                   onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => deleteWholeCluster(clusterNamePopup.memberIds)}
+                  onClick={() => deleteWholeCluster(clusterNamePopup.memberIds, popBg)}
                 >
                   delete all people
                 </button>
@@ -1034,6 +1057,8 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
               <div className="dd-tags">
                 {TAG_KEYS.map((t) => {
                   const active = selected.tags.includes(t);
+                  const isHighSignal = t === 'highsignal';
+                  const swatchColor = isHighSignal ? '#dde6f5' : tagColors[t] ?? '#8fc08f';
                   return (
                     <span
                       key={t}
@@ -1042,10 +1067,16 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
                       style={{
                         cursor: 'pointer',
                         opacity: active ? 1 : 0.35,
-                        borderColor: active ? tagColors[t] : 'transparent',
+                        borderColor: active ? swatchColor : 'transparent',
                       }}
                     >
-                      <i style={{ background: tagColors[t] ?? '#8fc08f' }} />
+                      <i
+                        style={
+                          isHighSignal
+                            ? { background: 'transparent', border: `1.2px solid ${swatchColor}`, boxSizing: 'border-box' }
+                            : { background: swatchColor }
+                        }
+                      />
                       {t}
                     </span>
                   );
@@ -1277,7 +1308,7 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
             <button
               className="dd-delete-person"
               style={{ marginTop: 6, background: '#6b2020' }}
-              onClick={() => deleteWholeCluster(selectedRope.memberIds)}
+              onClick={() => deleteWholeCluster(selectedRope.memberIds, selectedRope.baseBg)}
             >
               delete all people
             </button>

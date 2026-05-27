@@ -41,7 +41,8 @@ type SimLink = d3.SimulationLinkDatum<SimNode> & {
 };
 
 const tagColors: Record<string, string> = {
-  highsignal: '#f5d78e',
+  // highsignal is intentionally NOT a tag color — it renders as an astral
+  // outline overlay on the node instead. see "highsignal" overlay below.
   highagency: '#ffe98a',
   interesting: '#6ec4b4',
   fun: '#e89999',
@@ -243,6 +244,13 @@ type GraphCanvasProps = {
   onCreateAt?: (screenX: number, screenY: number, worldX: number, worldY: number, bg: string) => void;
   onMoveGroup?: (ids: number[]) => void;
   focusId?: number | null;
+  // imperative API for things AppPage needs to trigger from outside the canvas
+  // (currently just immediate haze cleanup on dissolve/delete).
+  apiRef?: React.MutableRefObject<CanvasApi | null>;
+};
+
+export type CanvasApi = {
+  wipeHazeForBg: (baseBg: string) => void;
 };
 
 export type RopeSelection = { bg: string; baseBg: string; memberIds: number[] };
@@ -254,6 +262,9 @@ type Runtime = {
   zoom: d3.ZoomBehavior<HTMLCanvasElement, unknown>;
   gNodes: SimNode[];
   applyGraph: (g: GraphPayload) => void;
+  // immediately fade out and delete every hazeState entry matching baseBg or
+  // baseBg#N. called by dissolve/delete so ghost hazes don't linger ~60 frames.
+  wipeHazeForBg: (baseBg: string) => void;
 };
 
 function primaryTagOf(tags: string[]): string {
@@ -261,7 +272,7 @@ function primaryTagOf(tags: string[]): string {
   return 'friends';
 }
 
-export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterClick, onConnect, onPinToMe, onSelectRope, onConnectClusters, onSelectClusterEdge, onSavePositions, onChangeBg, onCreateAt, onMoveGroup, focusId }: GraphCanvasProps) {
+export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterClick, onConnect, onPinToMe, onSelectRope, onConnectClusters, onSelectClusterEdge, onSavePositions, onChangeBg, onCreateAt, onMoveGroup, focusId, apiRef }: GraphCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const onSelectRef = useRef(onSelect);
@@ -351,9 +362,9 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     let lastShootSpawn = 0;
 
     const layers = [
-      { count: 520, rMin: 120, rMax: 1600, size: [0.25, 0.65], alpha: [0.08, 0.28], speed: [0.2, 0.7], depth: 0.35 },
-      { count: 300, rMin: 100, rMax: 1300, size: [0.45, 1.1], alpha: [0.18, 0.5], speed: [0.4, 1.1], depth: 0.65 },
-      { count: 120, rMin: 80, rMax: 1050, size: [0.9, 1.8], alpha: [0.35, 0.9], speed: [0.6, 1.6], depth: 1.0 },
+      { count: 2400, rMin: 120, rMax: 9000, size: [0.25, 0.65], alpha: [0.08, 0.28], speed: [0.2, 0.7], depth: 0.35 },
+      { count: 1200, rMin: 100, rMax: 7200, size: [0.45, 1.1], alpha: [0.18, 0.5], speed: [0.4, 1.1], depth: 0.65 },
+      { count: 480, rMin: 80, rMax: 5600, size: [0.9, 1.8], alpha: [0.35, 0.9], speed: [0.6, 1.6], depth: 1.0 },
     ];
     for (const lay of layers) {
       for (let i = 0; i < lay.count; i++) {
@@ -379,13 +390,13 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     }
 
     const nebColors = ['#6b8dd4', '#8b6bd4', '#d46b8b', '#6bd4c2', '#d4b66b', '#b36bd4', '#6bd47a', '#d46b6b'];
-    for (let i = 0; i < 18; i++) {
-      const r = 450 + Math.random() * 900;
+    for (let i = 0; i < 70; i++) {
+      const r = 450 + Math.random() * 7800;
       const ang = Math.random() * Math.PI * 2;
       nebulae.push({
         x: Math.cos(ang) * r,
         y: Math.sin(ang) * r,
-        radius: 180 + Math.random() * 320,
+        radius: 180 + Math.random() * 620,
         color: nebColors[i % nebColors.length],
         alpha: 0.05 + Math.random() * 0.08,
         drift: (Math.random() - 0.5) * 0.05,
@@ -395,8 +406,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       });
     }
 
-    for (let i = 0; i < 200; i++) {
-      const r = 80 + Math.random() * 1200;
+    for (let i = 0; i < 900; i++) {
+      const r = 80 + Math.random() * 8500;
       const ang = Math.random() * Math.PI * 2;
       dustMotes.push({
         x: Math.cos(ang) * r,
@@ -435,7 +446,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       }
     }
 
-    const orbitRings = [120, 240, 380, 540, 700, 880, 1050, 1220];
+    const orbitRings = [120, 240, 380, 540, 700, 880, 1050, 1220, 1420, 1640, 1880, 2150, 2450, 2800, 3200, 3700, 4300, 5000, 5800, 6700, 7700];
     for (const or of orbitRings) {
       const count = 3 + Math.floor(Math.random() * 4);
       for (let i = 0; i < count; i++) {
@@ -480,8 +491,11 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     };
 
     const galaxyTints = ['#c9b5ff', '#b5d7ff', '#ffd1b5', '#b5ffea', '#ffb5d7', '#d7ffb5'];
-    for (let i = 0; i < 14; i++) {
-      const { x, y } = placeAway(1500 + (i < 7 ? 0 : 700), i < 7 ? 2200 : 3700, 700);
+    for (let i = 0; i < 50; i++) {
+      const tier = Math.floor(i / 16); // 0,1,2
+      const tiers = [[1800, 4500], [4000, 9000], [8000, 15000]];
+      const [rMin, rMax] = tiers[Math.min(2, tier)];
+      const { x, y } = placeAway(rMin, rMax, 800);
       const spiral = Math.random() > 0.3 ? 1 : 0;
       galaxies.push({
         x,
@@ -497,14 +511,14 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     }
 
     // a handful of HUGE distant galaxies in the deep outer rim
-    for (let i = 0; i < 4; i++) {
-      const { x, y } = placeAway(2400, 4000, 1100);
+    for (let i = 0; i < 18; i++) {
+      const { x, y } = placeAway(7000, 17000, 1600);
       const spiral = Math.random() > 0.35 ? 1 : 0;
       distantGiants.push({
         x,
         y,
-        rx: 180 + Math.random() * 220,
-        ry: spiral ? 180 + Math.random() * 220 : 60 + Math.random() * 90,
+        rx: 320 + Math.random() * 380,
+        ry: spiral ? 320 + Math.random() * 380 : 120 + Math.random() * 180,
         rot: Math.random() * Math.PI,
         alpha: 0.04 + Math.random() * 0.05,
         tint: galaxyTints[i % galaxyTints.length],
@@ -516,8 +530,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     // small background galaxies — clearly galaxy-shaped
     const miniTints = ['#c9b5ff', '#b5d7ff', '#ffd1b5', '#b5ffea', '#ffb5e6', '#e6d4ff'];
     const miniKinds: MiniGalaxy['kind'][] = ['spiral', 'spiral', 'barred', 'elliptical'];
-    for (let i = 0; i < 22; i++) {
-      const { x, y } = placeAway(1400, 3500, 360);
+    for (let i = 0; i < 90; i++) {
+      const { x, y } = placeAway(1400, 14000, 360);
       miniGalaxies.push({
         x,
         y,
@@ -532,8 +546,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
 
     // planets scattered in outer space
     const planetTints = ['#d4a674', '#7ab0d4', '#d474a6', '#74d4a6', '#b574d4', '#d4d474'];
-    for (let i = 0; i < 24; i++) {
-      const r = 600 + Math.random() * 2400;
+    for (let i = 0; i < 100; i++) {
+      const r = 600 + Math.random() * 13000;
       const ang = Math.random() * Math.PI * 2;
       planets.push({
         x: Math.cos(ang) * r,
@@ -549,23 +563,24 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
 
     // long-period comets — big sweeping orbits that pass through outer space
     const cometTints = ['#b5d7ff', '#ffd1b5', '#c9b5ff', '#b5ffea'];
-    for (let i = 0; i < 14; i++) {
-      const wide = i >= 7;
+    for (let i = 0; i < 36; i++) {
+      const wide = i >= 12;
+      const huge = i >= 24;
       comets.push({
-        orbitCx: (Math.random() - 0.5) * (wide ? 600 : 200),
-        orbitCy: (Math.random() - 0.5) * (wide ? 600 : 200),
-        a: wide ? 1400 + Math.random() * 1200 : 650 + Math.random() * 450,
-        b: wide ? 700 + Math.random() * 600 : 280 + Math.random() * 220,
+        orbitCx: (Math.random() - 0.5) * (huge ? 3000 : wide ? 1200 : 300),
+        orbitCy: (Math.random() - 0.5) * (huge ? 3000 : wide ? 1200 : 300),
+        a: huge ? 6000 + Math.random() * 5000 : wide ? 2600 + Math.random() * 2200 : 650 + Math.random() * 450,
+        b: huge ? 3000 + Math.random() * 2500 : wide ? 1300 + Math.random() * 1100 : 280 + Math.random() * 220,
         theta: Math.random() * Math.PI * 2,
-        speed: (wide ? 0.018 : 0.04) + Math.random() * 0.05,
+        speed: (huge ? 0.008 : wide ? 0.018 : 0.04) + Math.random() * 0.05,
         tilt: Math.random() * Math.PI * 2,
         tint: cometTints[i % cometTints.length],
       });
     }
 
     // freely-drifting asteroids in the outer rim
-    for (let i = 0; i < 180; i++) {
-      const r = 750 + Math.random() * 2500;
+    for (let i = 0; i < 700; i++) {
+      const r = 750 + Math.random() * 13500;
       const ang = Math.random() * Math.PI * 2;
       asteroids.push({
         x: Math.cos(ang) * r,
@@ -578,13 +593,13 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     }
 
     // asteroid belts — rings of dense small rocks orbiting the deep outer rim
-    for (let bi = 0; bi < 3; bi++) {
+    for (let bi = 0; bi < 9; bi++) {
       const cx = (Math.random() - 0.5) * 200;
       const cy = (Math.random() - 0.5) * 200;
-      const rInner = 1400 + bi * 500 + Math.random() * 200;
-      const rOuter = rInner + 80 + Math.random() * 100;
+      const rInner = 1400 + bi * 1400 + Math.random() * 400;
+      const rOuter = rInner + 100 + Math.random() * 180;
       const rocks: AsteroidBelt['rocks'] = [];
-      const count = 220 + Math.floor(Math.random() * 120);
+      const count = 220 + Math.floor(Math.random() * 160);
       for (let i = 0; i < count; i++) {
         rocks.push({
           angle: Math.random() * Math.PI * 2,
@@ -630,7 +645,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       cy: number,
       total: number,
     ): Array<{ x: number; y: number; ring: number }> => {
-      const SPACING = 46;
+      const SPACING = 62;
       const slots: Array<{ x: number; y: number; ring: number }> = [];
       if (total <= 0) return slots;
       if (total === 1) {
@@ -698,8 +713,15 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     // LINK_DIST: two nodes of the same bg within this world distance are in
     // the same sub-cluster. used for both the haze/shape grouping AND the
     // click hit test. kept in one place so it stays consistent.
-    const LINK_DIST = 190;
+    // bumped from 190 → 260 to match wider lattice spacing (SPACING=62,
+    // ring step=60) — keeps a 12-node cluster connected through normal
+    // user drift without splitting into bg#2/bg#3.
+    const LINK_DIST = 260;
     const LINK_DIST_SQ = LINK_DIST * LINK_DIST;
+    // after Phase 2 produces sub-components, any two same-bg components whose
+    // centroids fall within MERGE_RADIUS merge back into the lower index.
+    // closes the "drift split then drift back" loop that left ghost hazes.
+    const MERGE_RADIUS_SQ = 320 * 320;
 
     // haze-first classification: if a node sits inside a visible haze it
     // belongs to that cluster. nodes outside every haze get union-found
@@ -750,8 +772,17 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         (usedIndices[base] ||= new Set()).add(idx);
       }
 
+      // named clusters are indivisible. once the user has named a bg, every
+      // free same-bg node belongs to the base key, regardless of spread.
+      // this is the single most important invariant — it prevents the
+      // "PKP has 3 nested hazes" bug. see Mechanics.md.
+      const names = graphRef.current.bucketNames ?? {};
       for (const bg of Object.keys(freeByBg)) {
         const nodes = freeByBg[bg];
+        if (names[bg]) {
+          for (const n of nodes) n._liveBg = bg;
+          continue;
+        }
         const parent = nodes.map((_, i) => i);
         const find = (i: number): number =>
           parent[i] === i ? i : (parent[i] = find(parent[i]));
@@ -772,7 +803,40 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           const r = find(i);
           (comps[r] ||= []).push(nodes[i]);
         }
-        const compArr = Object.values(comps).sort((a, b) => b.length - a.length);
+        // merge-back pass: any two components whose centroids fall within
+        // MERGE_RADIUS collapse into the bigger one. fixes the "drift apart
+        // then drift back together" case where Phase 2 created bg#2 that
+        // should now reunite with bg.
+        const compList = Object.values(comps);
+        if (compList.length > 1) {
+          const centroids = compList.map((g) => {
+            let cx = 0, cy = 0;
+            for (const n of g) { cx += n.x ?? 0; cy += n.y ?? 0; }
+            return { x: cx / g.length, y: cy / g.length };
+          });
+          const cparent = compList.map((_, i) => i);
+          const cfind = (i: number): number =>
+            cparent[i] === i ? i : (cparent[i] = cfind(cparent[i]));
+          for (let i = 0; i < compList.length; i++) {
+            for (let j = i + 1; j < compList.length; j++) {
+              const dx = centroids[i].x - centroids[j].x;
+              const dy = centroids[i].y - centroids[j].y;
+              if (dx * dx + dy * dy <= MERGE_RADIUS_SQ) {
+                const ra = cfind(i);
+                const rb = cfind(j);
+                if (ra !== rb) cparent[ra] = rb;
+              }
+            }
+          }
+          const merged: Record<number, SimNode[]> = {};
+          for (let i = 0; i < compList.length; i++) {
+            const r = cfind(i);
+            (merged[r] ||= []).push(...compList[i]);
+          }
+          compList.length = 0;
+          compList.push(...Object.values(merged));
+        }
+        const compArr = compList.sort((a, b) => b.length - a.length);
         const taken = usedIndices[bg] ?? new Set<number>();
         let nextIdx = 0;
         for (const members of compArr) {
@@ -981,7 +1045,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       }
       if (total >= 2 && total <= 8) {
         // single regular polygon
-        const radius = 22 + total * 6;
+        const radius = 30 + total * 8;
         for (let i = 0; i < total; i++) {
           const theta = orient + (i / total) * Math.PI * 2;
           place(unpinned[i], theta, radius);
@@ -993,12 +1057,12 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       // by the cluster, not on top of any single person.
       let index = 0;
       const ringSizes = [8, 14, 20, 26];
-      const baseRadius = 44;
+      const baseRadius = 60;
       let ring = 0;
       while (index < total) {
         const cap = ringSizes[ring] ?? ringSizes[ringSizes.length - 1];
         const take = Math.min(cap, total - index);
-        const radius = baseRadius + ring * 44;
+        const radius = baseRadius + ring * 60;
         const twist = ring % 2 === 0 ? 0 : Math.PI / cap;
         for (let i = 0; i < take; i++) {
           const theta = orient + twist + (i / take) * Math.PI * 2;
@@ -1190,11 +1254,17 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       }
       return best;
     };
+    // C-key gesture: while held, wheel spreads/contracts the current selection
+    // instead of zooming the camera. See onWheelSpread below.
+    let cKeyDown = false;
     const zoom = d3
       .zoom<HTMLCanvasElement, unknown>()
-      .scaleExtent([0.25, 4])
+      .scaleExtent([0.03, 4])
       .filter((ev) => {
-        if (ev.type === 'wheel') return true;
+        if (ev.type === 'wheel') {
+          if (cKeyDown && selectedIds.size >= 2) return false;
+          return true;
+        }
         if ((ev as KeyboardEvent).shiftKey) return false;
         if ((ev as KeyboardEvent).altKey) return false;
         if ((ev as KeyboardEvent).metaKey || (ev as KeyboardEvent).ctrlKey) return false;
@@ -1421,6 +1491,12 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     };
 
     let dragGroupStart: Array<{ n: SimNode; ox: number; oy: number }> = [];
+    // pointer + world coords captured at drag start. drag math runs in world
+    // space — d3-drag's event.x/y is in canvas pixels, which mismatches our
+    // world-space fx/fy at any zoom != 1 (cursor races ahead of nodes when
+    // zoomed out).
+    let dragStartPX = 0, dragStartPY = 0;
+    let dragStartWX = 0, dragStartWY = 0;
     const drag = d3
       .drag<HTMLCanvasElement, unknown>()
       .clickDistance(6)
@@ -1446,7 +1522,9 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           if (dx * dx + dy * dy < CLUSTER_CENTER_HIT_R * CLUSTER_CENTER_HIT_R) return null;
         }
         let best: SimNode | null = null;
-        let bestD = 22 * 22;
+        // 22-pixel hit radius — scale by zoom so it's easy to grab when small
+        const hitR = 22 / currentTransform.k;
+        let bestD = hitR * hitR;
         for (const n of gNodes) {
           const dx = (n.x ?? 0) - wx;
           const dy = (n.y ?? 0) - wy;
@@ -1460,6 +1538,11 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       })
       .on('start', (event) => {
         dragMoved = false;
+        const [mx, my] = d3.pointer(event.sourceEvent ?? event, canvas);
+        dragStartPX = mx;
+        dragStartPY = my;
+        dragStartWX = (mx - currentTransform.x) / currentTransform.k;
+        dragStartWY = (my - currentTransform.y) / currentTransform.k;
         dragStartX = event.x;
         dragStartY = event.y;
         if (!event.active) sim.alphaTarget(0.08).restart();
@@ -1478,20 +1561,25 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         }
       })
       .on('drag', (event) => {
-        const dx = event.x - dragStartX;
-        const dy = event.y - dragStartY;
-        if (dx * dx + dy * dy > 36) dragMoved = true;
+        const [mx, my] = d3.pointer(event.sourceEvent ?? event, canvas);
+        const pdx = mx - dragStartPX;
+        const pdy = my - dragStartPY;
+        // click-vs-drag threshold stays in pixels so it's zoom-independent
+        if (pdx * pdx + pdy * pdy > 36) dragMoved = true;
+        const wx = (mx - currentTransform.x) / currentTransform.k;
+        const wy = (my - currentTransform.y) / currentTransform.k;
         const n = event.subject as SimNode;
         if (dragGroupStart.length > 0) {
-          const dxT = event.x - (n.x ?? 0);
-          const dyT = event.y - (n.y ?? 0);
+          const wdx = wx - dragStartWX;
+          const wdy = wy - dragStartWY;
           for (const g of dragGroupStart) {
-            g.n.fx = (g.n.fx ?? g.ox) + dxT;
-            g.n.fy = (g.n.fy ?? g.oy) + dyT;
+            g.n.fx = g.ox + wdx;
+            g.n.fy = g.oy + wdy;
           }
         } else {
-          n.fx = event.x;
-          n.fy = event.y;
+          // single drag: pin the node exactly under the cursor in world space
+          n.fx = wx;
+          n.fy = wy;
         }
       })
       .on('end', (event) => {
@@ -1750,6 +1838,99 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     canvas.addEventListener('pointerup', onPointerUp, true);
     canvas.addEventListener('pointercancel', onPointerUp, true);
 
+    // ===== C + wheel: spread/contract selected nodes about their centroid =====
+    const isTypingTarget = (t: EventTarget | null) => {
+      if (!(t instanceof HTMLElement)) return false;
+      const tag = t.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || t.isContentEditable;
+    };
+    const onKeyDownC = (ev: KeyboardEvent) => {
+      if (ev.repeat) return;
+      if (isTypingTarget(ev.target)) return;
+      if (ev.key === 'c' || ev.key === 'C') {
+        cKeyDown = true;
+        console.log('[spread] C down, selectedIds:', selectedIds.size);
+      }
+    };
+    const onKeyUpC = (ev: KeyboardEvent) => {
+      if (ev.key === 'c' || ev.key === 'C') {
+        cKeyDown = false;
+        console.log('[spread] C up');
+      }
+    };
+    const onBlurC = () => {
+      cKeyDown = false;
+    };
+    window.addEventListener('keydown', onKeyDownC);
+    window.addEventListener('keyup', onKeyUpC);
+    window.addEventListener('blur', onBlurC);
+
+    let wheelSaveTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleWheelSave = () => {
+      if (wheelSaveTimer) clearTimeout(wheelSaveTimer);
+      wheelSaveTimer = setTimeout(() => {
+        const points: Array<{ id: number; x: number | null; y: number | null }> = [];
+        for (const n of gNodes) {
+          if (!selectedIds.has(n.id)) continue;
+          points.push({ id: n.id, x: n._ax ?? n.x ?? 0, y: n._ay ?? n.y ?? 0 });
+        }
+        if (points.length > 0) onSavePositionsRef.current?.(points);
+      }, 220);
+    };
+
+    const onWheelSpread = (ev: WheelEvent) => {
+      if (cKeyDown) {
+        console.log('[spread] wheel while C held, sel:', selectedIds.size, 'deltaY:', ev.deltaY);
+      }
+      if (!cKeyDown) return;
+      if (selectedIds.size < 2) return;
+      // only intercept when the wheel is over the canvas / its wrapper
+      const t = ev.target as Node | null;
+      if (t && !wrap.contains(t) && t !== canvas) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      ev.stopImmediatePropagation();
+      // trackpad pinch gestures synthesize wheel with ctrlKey + small deltas;
+      // regular two-finger scroll uses larger deltas. handle both.
+      const rawDelta = ev.deltaY;
+      const delta = Math.max(-180, Math.min(180, rawDelta));
+      // scroll up (delta < 0) → factor > 1 → spread; scroll down → contract
+      const factor = Math.exp(-delta * 0.004);
+      let cx = 0, cy = 0, n = 0;
+      for (const node of gNodes) {
+        if (!selectedIds.has(node.id)) continue;
+        cx += node.x ?? 0;
+        cy += node.y ?? 0;
+        n++;
+      }
+      if (n === 0) return;
+      cx /= n;
+      cy /= n;
+      for (const node of gNodes) {
+        if (!selectedIds.has(node.id)) continue;
+        const ox = node.x ?? 0;
+        const oy = node.y ?? 0;
+        const nx = cx + (ox - cx) * factor;
+        const ny = cy + (oy - cy) * factor;
+        node.x = nx;
+        node.y = ny;
+        node._ax = nx;
+        node._ay = ny;
+        node._pinned = true;
+        node.fx = null;
+        node.fy = null;
+        node.vx = 0;
+        node.vy = 0;
+      }
+      // nudge the sim so the haze/links re-render around new positions
+      sim.alpha(0.05);
+      scheduleWheelSave();
+    };
+    // attach at window-capture so we intercept BEFORE d3.zoom's own wheel
+    // listener on the canvas runs. d3.zoom is registered earlier on the
+    // canvas element, so a same-element listener would always be second.
+    window.addEventListener('wheel', onWheelSpread, { passive: false, capture: true });
+
     const onClick = (ev: MouseEvent) => {
       if (justConnected) {
         justConnected = false;
@@ -1835,7 +2016,10 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       }
       if (bestRope) {
         const baseBg = bestRope.split('#')[0];
-        const memberIds = gNodes.filter((n) => n._liveBg === bestRope).map((n) => n.id);
+        // memberIds = ALL nodes in the persistent bg, not just this sub-key's
+        // live component. sub-keys (bg#N) are a layout implementation detail
+        // and must never leak into user actions like dissolve. see Mechanics.md.
+        const memberIds = gNodes.filter((n) => n.bg === baseBg).map((n) => n.id);
         onSelectRopeRef.current?.({ bg: bestRope, baseBg, memberIds });
         onSelectEdgeRef.current?.(null);
         onSelectRef.current?.(null);
@@ -1902,7 +2086,11 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         }
       }
       if (hitBg) {
-        const members = gNodes.filter((n) => n._liveBg === hitBg).map((n) => n.id);
+        // memberIds = ALL nodes whose persistent bg matches the base — see
+        // Mechanics.md. sub-keys are internal; the user clicked PKP, they
+        // get PKP regardless of which sub-haze happened to be under them.
+        const baseBg = hitBg.split('#')[0];
+        const members = gNodes.filter((n) => n.bg === baseBg).map((n) => n.id);
         onClusterClickRef.current?.(hitBg, ev.clientX, ev.clientY, members);
         onSelectRef.current?.(null);
         onSelectEdgeRef.current?.(null);
@@ -1917,7 +2105,18 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     };
     canvas.addEventListener('click', onClick);
 
-    runtimeRef.current = { canvas, wrap, zoom, gNodes, applyGraph };
+    const wipeHazeForBg = (baseBg: string) => {
+      for (const key of Object.keys(hazeState)) {
+        if (key === baseBg || key.startsWith(baseBg + '#')) {
+          // zero alpha and radius — the per-frame cleanup (a < 0.005) deletes
+          // it next frame, before computeLiveComponents can capture anything.
+          hazeState[key].a = 0;
+          hazeState[key].r = 0;
+        }
+      }
+    };
+    runtimeRef.current = { canvas, wrap, zoom, gNodes, applyGraph, wipeHazeForBg };
+    if (apiRef) apiRef.current = { wipeHazeForBg };
 
     // initial seed from whatever graph was present at mount
     applyGraph(graphRef.current);
@@ -1936,7 +2135,7 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       if (now - lastShootSpawn > 1400 + Math.random() * 800) {
         lastShootSpawn = now;
         const edge = Math.floor(Math.random() * 4);
-        const span = 900;
+        const span = 4500;
         let x = 0,
           y = 0,
           dx = 0,
@@ -2646,6 +2845,13 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       ctx.beginPath();
       ctx.arc(0, 0, 820, 0, Math.PI * 2);
       ctx.stroke();
+      // outer-rim rings — only visible when zoomed out
+      ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+      for (const r of [1100, 1500, 1950, 2500, 3100, 3900, 4900, 6200, 7800, 9800, 12500]) {
+        ctx.beginPath();
+        ctx.arc(0, 0, r, 0, Math.PI * 2);
+        ctx.stroke();
+      }
       ctx.setLineDash([]);
       const tickRing = 460;
       const tickRot = tSec * 0.04;
@@ -3016,6 +3222,97 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           }
         }
 
+        // highsignal: astral beacon — cool blue-white halo + 4 long lens-flare
+        // spikes + spinning dashed orbit + sonar pulse rings + rotating sweep
+        // arc + bright inner core. animated heavily so it reads as "alive"
+        // / broadcasting across the field. NOT a tag color (no pie slice) —
+        // purely an overlay so the dot's bg/tag colors still read underneath.
+        if (tags.includes('highsignal')) {
+          const phase = n._starPhase || 0;
+          const breath = 0.72 + 0.28 * Math.sin(tSec * 2.0 + phase);
+          const ik = 1 / currentTransform.k;
+          ctx.save();
+          // 1. outer halo — cool blue-white, pulses harder than before
+          const haloR = r + (15 + 4 * Math.sin(tSec * 2 + phase)) * ik;
+          const halo = ctx.createRadialGradient(x, y, r, x, y, haloR);
+          halo.addColorStop(0, `rgba(190,215,255,${0.38 * breath})`);
+          halo.addColorStop(0.4, `rgba(170,205,255,${0.18 * breath})`);
+          halo.addColorStop(1, 'rgba(170,205,255,0)');
+          ctx.fillStyle = halo;
+          ctx.beginPath();
+          ctx.arc(x, y, haloR, 0, Math.PI * 2);
+          ctx.fill();
+          // 2. sonar pulse rings — two rings expand outward from the dot on a
+          //    staggered loop, fading as they expand. main animation engine.
+          const sonarPeriod = 1.6;
+          for (let i = 0; i < 2; i++) {
+            const t = (((tSec + phase * 0.3 + (i * sonarPeriod) / 2) % sonarPeriod) + sonarPeriod) % sonarPeriod / sonarPeriod;
+            const ringR = r + (1 + t * 22) * ik;
+            const a = (1 - t) * 0.6;
+            if (a < 0.02) continue;
+            ctx.strokeStyle = `rgba(220,235,255,${a})`;
+            ctx.lineWidth = 1.2 * ik;
+            ctx.beginPath();
+            ctx.arc(x, y, ringR, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+          // 3. lens-flare spikes — slight length pulse so they breathe with it
+          const spikeIn = r + 1.5 * ik;
+          const spikeOut = r + (13 + 3 * Math.sin(tSec * 2 + phase)) * ik;
+          for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const sx = x + dx * spikeIn;
+            const sy = y + dy * spikeIn;
+            const ex = x + dx * spikeOut;
+            const ey = y + dy * spikeOut;
+            const g = ctx.createLinearGradient(sx, sy, ex, ey);
+            g.addColorStop(0, `rgba(240,248,255,${0.98 * breath})`);
+            g.addColorStop(0.5, `rgba(220,235,255,${0.4 * breath})`);
+            g.addColorStop(1, 'rgba(220,235,255,0)');
+            ctx.strokeStyle = g;
+            ctx.lineWidth = 1.6 * ik;
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+            ctx.moveTo(sx, sy);
+            ctx.lineTo(ex, ey);
+            ctx.stroke();
+          }
+          ctx.lineCap = 'butt';
+          // 4. bright inner ring — anchors the figure
+          ctx.strokeStyle = `rgba(248,252,255,${0.98 * breath})`;
+          ctx.lineWidth = 1.5 * ik;
+          ctx.beginPath();
+          ctx.arc(x, y, r + 2 * ik, 0, Math.PI * 2);
+          ctx.stroke();
+          // 5. spinning dashed orbit — fast rotation, very visible motion
+          ctx.strokeStyle = `rgba(215,232,255,${0.85 * breath})`;
+          ctx.lineWidth = 1.1 * ik;
+          ctx.setLineDash([3 * ik, 3 * ik]);
+          ctx.lineDashOffset = -tSec * 22 * ik;
+          ctx.beginPath();
+          ctx.arc(x, y, r + 6 * ik, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.lineDashOffset = 0;
+          // 6. radar sweep arc — bright short arc that rotates around the
+          //    orbit ring, like a radar dish. cleanest motion cue.
+          const sweepAng = tSec * 1.8 + phase;
+          const sweepR = r + 6 * ik;
+          ctx.strokeStyle = `rgba(255,255,255,${0.95 * breath})`;
+          ctx.lineWidth = 1.7 * ik;
+          ctx.lineCap = 'round';
+          ctx.beginPath();
+          ctx.arc(x, y, sweepR, sweepAng, sweepAng + 0.55);
+          ctx.stroke();
+          // trailing fade arc behind the sweep head
+          ctx.strokeStyle = `rgba(220,235,255,${0.35 * breath})`;
+          ctx.lineWidth = 1.2 * ik;
+          ctx.beginPath();
+          ctx.arc(x, y, sweepR, sweepAng - 1.0, sweepAng);
+          ctx.stroke();
+          ctx.lineCap = 'butt';
+          ctx.restore();
+        }
+
         if (isStar) {
           // bright translucent overlay — keeps the base color visible underneath
           // but brightens it, plus a gentle outer halo ring as flair. pulses
@@ -3055,21 +3352,26 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         }
 
         // ===== name label =====
-        // always above the dot regardless of high-agency — position shouldn't
-        // shift when a trait is toggled. bold + stroked for readability on
-        // any background.
+        // labels are sized in WORLD units so they scale with the world: shrink
+        // when zoomed out, grow when zoomed in. avoids the "huge labels over
+        // tiny nodes" mess at deep zoom-out. fade out below ~3 screen-px so
+        // unreadable labels don't pile up as noise.
         const firstName = n.name.split(' ')[0];
-        const fs = 13 / currentTransform.k;
-        const ly = y - r - 7 / currentTransform.k;
-        ctx.font = `600 ${fs}px Inter, sans-serif`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.lineWidth = 3.5 / currentTransform.k;
-        ctx.strokeStyle = 'rgba(0,0,0,0.92)';
-        ctx.strokeText(firstName, x, ly);
-        const alpha = Math.min(1, 0.82 + n.s * 0.018);
-        ctx.fillStyle = `rgba(240,242,248,${alpha})`;
-        ctx.fillText(firstName, x, ly);
+        const fsWU = 13; // world units
+        const screenPx = fsWU * currentTransform.k;
+        const labelFade = Math.min(1, Math.max(0, (screenPx - 2.5) / 4));
+        if (labelFade > 0.02) {
+          const ly = y - r - 5;
+          ctx.font = `600 ${fsWU}px Inter, sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.lineWidth = 3.5;
+          ctx.strokeStyle = `rgba(0,0,0,${0.92 * labelFade})`;
+          ctx.strokeText(firstName, x, ly);
+          const alpha = Math.min(1, 0.82 + n.s * 0.018) * labelFade;
+          ctx.fillStyle = `rgba(240,242,248,${alpha})`;
+          ctx.fillText(firstName, x, ly);
+        }
       }
 
       // ===== "you" node =====
@@ -3109,7 +3411,13 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       canvas.removeEventListener('pointermove', onPointerMove, true);
       canvas.removeEventListener('pointerup', onPointerUp, true);
       canvas.removeEventListener('pointercancel', onPointerUp, true);
+      window.removeEventListener('wheel', onWheelSpread, { capture: true } as EventListenerOptions);
+      window.removeEventListener('keydown', onKeyDownC);
+      window.removeEventListener('keyup', onKeyUpC);
+      window.removeEventListener('blur', onBlurC);
+      if (wheelSaveTimer) clearTimeout(wheelSaveTimer);
       runtimeRef.current = null;
+      if (apiRef) apiRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
