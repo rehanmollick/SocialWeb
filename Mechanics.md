@@ -124,23 +124,32 @@ Called with the array of moved nodes (1 for single, N for group).
 Per node:
 1. `_pinned = true`, `_ax/_ay = current pos`, `fx/fy = null`, `vx/vy = 0`.
 
-Cluster reassignment:
+Cluster reassignment — `pickDropBg(px, py)`:
+
+**The haze is the cluster boundary.** A single unified rule decides
+destination, with NO own-vs-foreign asymmetry (that asymmetry was the cause
+of phantom clusters spawning inside an existing haze):
+
+1. **Nearest visible base-key haze whose interior (`r * HAZE_JOIN_FACTOR`,
+   0.9) contains the point** → join it. Own haze and foreign haze are treated
+   identically. Dropping anywhere inside a cluster's glow keeps/joins that
+   cluster.
+2. **Else: nearest non-moved node within `LINK_DIST` (260)** → adopt its bg.
+3. **Else (genuinely open space): new bg `c${Date.now()}`.**
 
 **Group of 2+ nodes:**
-1. Compute group centroid.
-2. **Whole-cluster move detection**: if ALL nodes of the majority bg in the
-   moved set, and the majority bg has at least 2 movers → keep original bg,
-   just reseed haze at new centroid.
-3. Else: closest foreign haze whose `(r*0.7)` interior contains centroid →
-   adopt that bg.
-4. Else: still inside own bg's haze at `r*0.5` → keep.
-5. Else: any moved node within `LINK_DIST` of any non-moved node → adopt that
-   non-moved node's bg.
-6. Else: new bg `c${Date.now()}`.
+- **Whole-cluster move detection** runs first: if ALL nodes of the majority
+  bg are in the moved set → keep original bg, reseed haze at new centroid.
+- Otherwise `pickDropBg(groupCentroid)` decides for the whole group.
+- All moved nodes in a group get the **same** final bg.
 
-**Single node:** same as 2–6, scoped to the one node.
+**Single node:** `pickDropBg(dropPoint)`.
 
-All moved nodes in a group get the **same** final bg.
+`HAZE_JOIN_FACTOR = 0.9` is intentionally generous (Phase 1 capture uses
+0.85). The small mismatch zone (0.85–0.9) is harmless: a node assigned a
+cluster's bg but not captured by Phase 1 is a free same-bg node, which Phase
+2 reunites with the cluster (named → forced to base key; unnamed → union-find
+within LINK_DIST).
 
 ---
 

@@ -1330,6 +1330,40 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       const movedSet = new Set(movedNodes.map((m) => m.id));
       const isGroup = movedNodes.length > 1;
 
+      // decide which cluster a drop at (px,py) joins. THE HAZE IS THE CLUSTER
+      // BOUNDARY: if you drop inside any visible haze (own OR foreign), you
+      // join it — no asymmetry between own/foreign, no phantom clusters
+      // spawned inside an existing one. only truly open-space drops check node
+      // proximity, then fall back to a brand-new bg. see Mechanics.md handleDrop.
+      const HAZE_JOIN_FACTOR = 0.9;
+      const pickDropBg = (px: number, py: number, makeNew: () => string): string => {
+        // 1. nearest visible base-key haze whose interior contains the point
+        let bestBg: string | null = null;
+        let bestD2 = Infinity;
+        for (const key of Object.keys(hazeState)) {
+          if (key.includes('#')) continue;
+          const st = hazeState[key];
+          if (!st || st.a < 0.1) continue;
+          const d2 = (st.x - px) ** 2 + (st.y - py) ** 2;
+          const limit = (st.r * HAZE_JOIN_FACTOR) ** 2;
+          if (d2 < limit && d2 < bestD2) { bestD2 = d2; bestBg = key; }
+        }
+        if (bestBg) return bestBg;
+        // 2. nearest non-moved node within LINK_DIST → adopt its bg
+        let nearBg: string | null = null;
+        let nearD2 = LINK_DIST_SQ;
+        for (const other of gNodes) {
+          if (movedSet.has(other.id)) continue;
+          const dx = (other.x ?? 0) - px;
+          const dy = (other.y ?? 0) - py;
+          const d2 = dx * dx + dy * dy;
+          if (d2 < nearD2) { nearD2 = d2; nearBg = other.bg; }
+        }
+        if (nearBg) return nearBg;
+        // 3. open space → new cluster
+        return makeNew();
+      };
+
       if (isGroup) {
         // group drag: decide ONE destination for the entire group using centroid
         let gcx = 0, gcy = 0;
@@ -1356,36 +1390,10 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           if (st) { st.x = gcx; st.y = gcy; }
           else { hazeState[majorBg] = { x: gcx, y: gcy, r: 110, a: 0.5 }; }
         } else {
-          let bestD2 = Infinity;
-          for (const key of Object.keys(hazeState)) {
-            if (key.includes('#')) continue;
-            const st = hazeState[key];
-            if (!st || st.a < 0.1) continue;
-            const d2 = (st.x - gcx) ** 2 + (st.y - gcy) ** 2;
-            const limit = (st.r * 0.7) ** 2;
-            if (d2 < limit && d2 < bestD2) { bestD2 = d2; groupBg = key; }
-          }
-          if (!groupBg) {
-            const ownSt = hazeState[majorBg];
-            const inOwnHaze = ownSt && ownSt.a > 0.1 &&
-              ((gcx - ownSt.x) ** 2 + (gcy - ownSt.y) ** 2) < (ownSt.r * 0.5) ** 2;
-            if (!inOwnHaze) {
-              // check if any moved node is near a non-moved node
-              let nearBg: string | null = null;
-              let nearD2 = LINK_DIST_SQ;
-              for (const m of movedNodes) {
-                const px = m._ax ?? 0, py = m._ay ?? 0;
-                for (const other of gNodes) {
-                  if (movedSet.has(other.id)) continue;
-                  const dx = (other.x ?? 0) - px;
-                  const dy = (other.y ?? 0) - py;
-                  const d2 = dx * dx + dy * dy;
-                  if (d2 < nearD2) { nearD2 = d2; nearBg = other.bg; }
-                }
-              }
-              groupBg = nearBg ?? `c${Date.now()}`;
-            }
-          }
+          // join whatever cluster the group centroid landed in (or keep own
+          // bg if the centroid is still inside the own haze — pickDropBg
+          // treats own and foreign hazes the same).
+          groupBg = pickDropBg(gcx, gcy, () => `c${Date.now()}`);
         }
         if (groupBg) {
           for (const m of movedNodes) {
@@ -1396,55 +1404,18 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         }
         onMoveGroupRef.current?.(movedNodes.map((m) => m.id));
       } else {
-        // single node drop — per-node logic
-        let sharedNewBg: string | null = null;
-        for (const m of movedNodes) {
-          const px = m._ax ?? 0;
-          const py = m._ay ?? 0;
-          let hitBg: string | null = null;
-          let hitD2 = Infinity;
-          for (const key of Object.keys(hazeState)) {
-            if (key.includes('#')) continue;
-            if (key === m.bg) continue;
-            const st = hazeState[key];
-            if (!st || st.a < 0.1) continue;
-            const d2 = (st.x - px) ** 2 + (st.y - py) ** 2;
-            const limit = (st.r * 0.7) ** 2;
-            if (d2 < limit && d2 < hitD2) {
-              hitD2 = d2;
-              hitBg = key;
-            }
-          }
-          if (!hitBg) {
-            const ownSt = hazeState[m.bg];
-            const inOwnHaze = ownSt && ownSt.a > 0.1 &&
-              ((px - ownSt.x) ** 2 + (py - ownSt.y) ** 2) < (ownSt.r * 0.5) ** 2;
-            if (!inOwnHaze) {
-              let nearBg: string | null = null;
-              let nearD2 = LINK_DIST_SQ;
-              for (const other of gNodes) {
-                if (movedSet.has(other.id)) continue;
-                if (other.bg === m.bg) continue;
-                const dx = (other.x ?? 0) - px;
-                const dy = (other.y ?? 0) - py;
-                const d2 = dx * dx + dy * dy;
-                if (d2 < nearD2) { nearD2 = d2; nearBg = other.bg; }
-              }
-              if (nearBg) {
-                hitBg = nearBg;
-              } else if (sharedNewBg) {
-                hitBg = sharedNewBg;
-              } else {
-                hitBg = `c${Date.now()}`;
-                sharedNewBg = hitBg;
-              }
-            }
-          }
-          if (hitBg) {
-            oldBgsLosingMembers.add(m.bg);
-            m.bg = hitBg;
-            onChangeBgRef.current?.(m.id, hitBg);
-          }
+        // single node drop. pickDropBg keeps the node in its own cluster if
+        // it's still inside that haze, joins a foreign haze if dropped inside
+        // one, adopts a nearby node's bg, or spawns a new cluster only in
+        // genuinely open space.
+        const m = movedNodes[0];
+        const px = m._ax ?? 0;
+        const py = m._ay ?? 0;
+        const hitBg = pickDropBg(px, py, () => `c${Date.now()}`);
+        if (hitBg !== m.bg) {
+          oldBgsLosingMembers.add(m.bg);
+          m.bg = hitBg;
+          onChangeBgRef.current?.(m.id, hitBg);
         }
       }
       const affectedBgs = new Set(movedNodes.map((m) => m.bg));
