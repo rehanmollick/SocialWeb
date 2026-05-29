@@ -1531,18 +1531,9 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         const [mx, my] = d3.pointer(event, canvas);
         const wx = (mx - currentTransform.x) / currentTransform.k;
         const wy = (my - currentTransform.y) / currentTransform.k;
-        // if click is near a cluster center, don't pick up nodes —
-        // let the click handler open the cluster popup instead
-        for (const key of Object.keys(hazeState)) {
-          const st = hazeState[key];
-          if (!st || st.a < 0.12) continue;
-          const dx = wx - st.x;
-          const dy = wy - st.y;
-          if (dx * dx + dy * dy < CLUSTER_CENTER_HIT_R * CLUSTER_CENTER_HIT_R) return null;
-        }
+        // nearest grabbable node
         let best: SimNode | null = null;
-        // 22-pixel hit radius — scale by zoom so it's easy to grab when small
-        const hitR = 22 / currentTransform.k;
+        const hitR = 22 / currentTransform.k; // scale by zoom so small dots stay grabbable
         let bestD = hitR * hitR;
         for (const n of gNodes) {
           const dx = (n.x ?? 0) - wx;
@@ -1552,6 +1543,24 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
             bestD = d2;
             best = n;
           }
+        }
+        // nearest visible cluster center
+        let centerD2 = Infinity;
+        for (const key of Object.keys(hazeState)) {
+          const st = hazeState[key];
+          if (!st || st.a < 0.12) continue;
+          const dx = wx - st.x;
+          const dy = wy - st.y;
+          const d2 = dx * dx + dy * dy;
+          if (d2 < centerD2) centerD2 = d2;
+        }
+        // NODE WINS over the center zone. only when the cursor is inside a
+        // center zone AND no node is closer do we bail (return null) so the
+        // click opens the rename popup. previously the center check ran first
+        // and swallowed nodes that sit near a small cluster's center — making
+        // freshly-formed 2-node clusters impossible to grab.
+        if (centerD2 < CLUSTER_CENTER_HIT_R * CLUSTER_CENTER_HIT_R) {
+          if (!best || bestD > centerD2) return null;
         }
         return best;
       })
@@ -1955,7 +1964,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       const wy = (my - currentTransform.y) / currentTransform.k;
 
       let hitNode: SimNode | null = null;
-      let hitD = 22 * 22;
+      const clickHitR = 22 / currentTransform.k; // match the drag subject's zoom-scaled radius
+      let hitD = clickHitR * clickHitR;
       for (const n of gNodes) {
         const dx = (n.x ?? 0) - wx;
         const dy = (n.y ?? 0) - wy;
