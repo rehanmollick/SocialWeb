@@ -26,6 +26,46 @@ There are two coordinate systems in the data model:
 
 ---
 
+## The Event Horizon model (core invariant)
+
+Every cluster's haze has a radius `r`. **That radius IS the cluster's boundary
+— its "event horizon" — and its tracked size.** Three rules follow, and they
+are the backbone that prevents clusters-inside-clusters:
+
+1. **The horizon contains every member.** The radius is sized from the
+   *furthest* member (`max member distance + HORIZON_PAD`), not a percentile.
+   No member is ever outside its own cluster's horizon.
+2. **Inside a horizon ⇒ member of that cluster.** Phase 1 capture and
+   handleDrop both test against the full horizon (`r * HORIZON_CAPTURE`, =1.0).
+   Closest horizon wins when they overlap.
+3. **A new cluster can only form OUTSIDE every horizon.** Phase 2 only ever
+   runs on "free" nodes — those outside all horizons — and a haze only
+   appears once 2+ such nodes are grouped together. A single node in open
+   space is a floater (no haze).
+
+The horizon grows when you spread a cluster's nodes (the furthest member is
+now farther) and shrinks when you pull them tight. It's clamped to
+`[HORIZON_MIN=110, HORIZON_MAX=2400]`.
+
+Constants (canvas.tsx, near `LINK_DIST`):
+
+| | Value | Meaning |
+|---|---|---|
+| `HORIZON_PAD` | 58 wu | breathing room past the furthest member |
+| `HORIZON_MIN` | 110 wu | smallest horizon (small clusters stay clickable) |
+| `HORIZON_MAX` | 2400 wu | guard against a runaway feedback balloon |
+| `HORIZON_CAPTURE` | 1.0 | fraction of `r` used as the membership test |
+
+The live horizons are queryable via `CanvasApi.getClusterHorizons()` →
+`{ bg, baseBg, x, y, r, members }[]` — the "invisible measurement" of cluster
+size.
+
+**Drag feedback**: while a node is being dragged, the horizon it's currently
+inside gets a dashed highlight ring so the user can see which cluster they're
+about to drop into. Makes in/out dragging seamless.
+
+---
+
 ## Cluster identity rules
 
 A cluster's identity is its **base bg** (the `bg` string without any `#N` suffix).
@@ -75,9 +115,11 @@ Runs every tick before sim integration. Outputs each node's `_liveBg`.
 | Capturing haze | `st.a >= 0.08` | Only visible hazes capture. |
 
 ### Phase 1 — Haze capture
-For each node: find the *closest* visible haze (`a >= 0.08`) whose interior
-contains the node (`distance < 0.85 * r`). If found, `_liveBg = haze key`.
-Else: free.
+For each node: find the *closest* visible haze (`a >= 0.08`) whose **event
+horizon** contains the node (`distance < r * HORIZON_CAPTURE`, = full radius).
+If found, `_liveBg = haze key`. Else: free. Capturing within the full horizon
+(not 0.85) is what keeps a cluster from shedding its own outer members into
+phantom sub-clusters.
 
 ### Phase 2 — Union-find on free same-bg nodes
 For each `bg`:
@@ -106,6 +148,13 @@ A `Record<key, { x, y, r, a }>` keyed by `_liveBg`. Per frame, for each live
 - 80th-percentile distance from centroid (trimmed for outliers) → target `r`
 - compactness → target `a` (max 0.95)
 - Lerp: grow 0.14, shrink 0.05.
+
+**Radius = event horizon.** Target radius is `clamp(furthestMember +
+HORIZON_PAD, HORIZON_MIN, HORIZON_MAX)` — it contains every member by
+construction (was an 80th-percentile spread, which left outliers outside the
+haze and caused phantom sub-clusters). Dragged nodes (`fx != null`) are
+excluded from the furthest-member calc so an in-flight node doesn't balloon
+the horizon mid-drag.
 
 Hazes for keys with **no live nodes**: alpha decays at 0.08/frame.
 Once `a < 0.005`: `delete hazeState[key]`.
@@ -247,6 +296,18 @@ the anchor.
 9. Delete every person but one in a cluster → haze fades, lone dot floats.
 10. Hide a rope from the controls HUD → the rope's row appears in "hidden
     ropes" list with a "show" button.
+
+---
+
+## Data hygiene
+
+`GET /api/graph` only returns `bucketNames` / `bucketRopes` / `clusterEdges`
+for bgs that currently have ≥1 person. A named bg with zero people is
+orphaned cruft (from an old dissolve bug or a dropped cluster) and would
+otherwise show as a phantom empty cluster in the sidebar. Because `bg` only
+changes on drop (which always reassigns), "0 people" reliably means
+genuinely empty. The rows are hidden from the response, not deleted, so
+there's no race with in-flight cluster creation.
 
 ---
 

@@ -272,11 +272,7 @@ export default function AppPage({ onLeaveToLanding }: AppPageProps) {
     // sub-cluster slice. see Mechanics.md.
     const fromGraph = graph.nodes.filter((n) => n.bg === baseBg).map((n) => n.id);
     const fullIds = fromGraph.length > 0 ? fromGraph : popupIds;
-    console.log('[dissolve]', { baseBg, fromGraphCount: fromGraph.length, popupCount: popupIds.length, fullIds });
-    if (fullIds.length === 0) {
-      console.warn('[dissolve] no members found for', baseBg, '— aborting');
-      return;
-    }
+    if (fullIds.length === 0) return;
     const ok = window.confirm(
       `Dissolve this cluster? The ${fullIds.length} ${fullIds.length === 1 ? 'person' : 'people'} will be absorbed by the nearest cluster (or move to the default group if none is near).`,
     );

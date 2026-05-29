@@ -28,9 +28,16 @@ export async function GET() {
   const overrides = await db.query.edgeOverrides.findMany();
   const bucketRows = await db.query.bucketNames.findMany();
   const clusterEdgeRows = await db.query.clusterEdges.findMany();
+  // only surface cluster metadata for bgs that actually have members. a
+  // named bg with zero people is orphaned cruft (left over from a dissolve/
+  // delete or an old bug) — it would otherwise show as a phantom empty
+  // cluster in the sidebar. bg only changes on drop (which always reassigns),
+  // so "0 people" means genuinely empty, safe to hide.
+  const populatedBgs = new Set(allPeople.map((p) => p.bg));
   const bucketNames: Record<string, string> = {};
   const bucketRopes: Record<string, { weight: number | null; hidden: boolean }> = {};
   for (const r of bucketRows) {
+    if (!populatedBgs.has(r.bg)) continue;
     if (r.name) bucketNames[r.bg] = r.name;
     bucketRopes[r.bg] = { weight: r.meWeight, hidden: !!r.meHidden };
   }
@@ -88,7 +95,10 @@ export async function GET() {
     emitted.add(k);
   }
 
-  const clusterEdges = clusterEdgeRows.map((r) => ({ a: r.bgA, b: r.bgB, weight: r.weight }));
+  // drop cluster-edges whose endpoints no longer both have members
+  const clusterEdges = clusterEdgeRows
+    .filter((r) => populatedBgs.has(r.bgA) && populatedBgs.has(r.bgB))
+    .map((r) => ({ a: r.bgA, b: r.bgB, weight: r.weight }));
 
   return NextResponse.json({ nodes, edges, bucketNames, bucketRopes, clusterEdges });
 }

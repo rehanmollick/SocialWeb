@@ -249,6 +249,15 @@ type GraphCanvasProps = {
   apiRef?: React.MutableRefObject<CanvasApi | null>;
 };
 
+export type ClusterHorizon = {
+  bg: string;        // live key (may be a sub-key like c123#2)
+  baseBg: string;    // persistent base bg
+  x: number;         // event horizon center (world)
+  y: number;
+  r: number;         // event horizon radius = the cluster's tracked SIZE
+  members: number;   // live member count inside the horizon
+};
+
 export type CanvasApi = {
   // immediately zero out hazeState entries for baseBg + baseBg#N so a
   // dissolve/delete doesn't leave ghost hazes fading for ~60 frames.
@@ -259,6 +268,10 @@ export type CanvasApi = {
   // itself (and its sub-keys) from candidate destinations. returns a map
   // { [id]: destinationBg }; ids absent from the map default to 'online'.
   absorbDissolvingNodes: (dissolvingBaseBg: string, ids: number[]) => Record<number, string>;
+  // the live event horizons — each cluster's tracked size + center. this is
+  // the "invisible measurement" of cluster size: r is the boundary, grows
+  // when nodes spread, shrinks when they pack tight.
+  getClusterHorizons: () => ClusterHorizon[];
 };
 
 export type RopeSelection = { bg: string; baseBg: string; memberIds: number[] };
@@ -731,6 +744,20 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     // closes the "drift split then drift back" loop that left ghost hazes.
     const MERGE_RADIUS_SQ = 320 * 320;
 
+    // ===== EVENT HORIZON MODEL (see Mechanics.md) =====
+    // A cluster's haze radius IS its boundary — its "event horizon". The
+    // horizon is sized to CONTAIN every member (furthest member + padding), so:
+    //   - anything inside a horizon belongs to that cluster (Phase 1 capture)
+    //   - a drop inside a horizon joins that cluster (handleDrop)
+    //   - a NEW cluster can only form OUTSIDE every horizon (Phase 2)
+    // This is the single invariant that prevents clusters-inside-clusters.
+    const HORIZON_PAD = 58;     // world units of breathing room past the furthest member
+    const HORIZON_MIN = 110;    // smallest horizon — keeps tiny clusters clickable
+    const HORIZON_MAX = 2400;   // safety cap against a runaway feedback balloon
+    // fraction of the horizon used as the membership boundary. 1.0 = the haze
+    // edge exactly. kept here so capture + drop + render all agree.
+    const HORIZON_CAPTURE = 1.0;
+
     // haze-first classification: if a node sits inside a visible haze it
     // belongs to that cluster. nodes outside every haze get union-found
     // with nearby same-bg neighbours to form NEW clusters. this matches
@@ -741,7 +768,9 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         n._liveBg = null;
         if (!n.bg) continue;
 
-        // check existing hazes — closest visible haze wins
+        // check existing hazes — closest event horizon that contains the node
+        // wins. capture within the FULL horizon (not 0.85) so a cluster never
+        // sheds its own outer members into phantom sub-clusters.
         let bestKey: string | null = null;
         let bestD2 = Infinity;
         for (const key of Object.keys(hazeState)) {
@@ -750,7 +779,8 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
           const dx = (n.x ?? 0) - st.x;
           const dy = (n.y ?? 0) - st.y;
           const d2 = dx * dx + dy * dy;
-          const limit = (st.r * 0.85) * (st.r * 0.85);
+          const horizon = st.r * HORIZON_CAPTURE;
+          const limit = horizon * horizon;
           if (d2 < limit && d2 < bestD2) {
             bestD2 = d2;
             bestKey = key;
@@ -1330,26 +1360,26 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       const movedSet = new Set(movedNodes.map((m) => m.id));
       const isGroup = movedNodes.length > 1;
 
-      // decide which cluster a drop at (px,py) joins. THE HAZE IS THE CLUSTER
-      // BOUNDARY: if you drop inside any visible haze (own OR foreign), you
-      // join it — no asymmetry between own/foreign, no phantom clusters
-      // spawned inside an existing one. only truly open-space drops check node
-      // proximity, then fall back to a brand-new bg. see Mechanics.md handleDrop.
-      const HAZE_JOIN_FACTOR = 0.9;
+      // decide which cluster a drop at (px,py) joins. THE EVENT HORIZON IS THE
+      // CLUSTER BOUNDARY: if you drop inside any haze's horizon (own OR
+      // foreign), you join it — no asymmetry, no phantom clusters spawned
+      // inside an existing one. only drops OUTSIDE every horizon check node
+      // proximity, then fall back to a new bg. see Mechanics.md handleDrop.
       const pickDropBg = (px: number, py: number, makeNew: () => string): string => {
-        // 1. nearest visible base-key haze whose interior contains the point
+        // 1. nearest base-key event horizon that contains the point
         let bestBg: string | null = null;
         let bestD2 = Infinity;
         for (const key of Object.keys(hazeState)) {
           if (key.includes('#')) continue;
           const st = hazeState[key];
-          if (!st || st.a < 0.1) continue;
+          if (!st || st.a < 0.08) continue;
+          const horizon = st.r * HORIZON_CAPTURE;
           const d2 = (st.x - px) ** 2 + (st.y - py) ** 2;
-          const limit = (st.r * HAZE_JOIN_FACTOR) ** 2;
-          if (d2 < limit && d2 < bestD2) { bestD2 = d2; bestBg = key; }
+          if (d2 < horizon * horizon && d2 < bestD2) { bestD2 = d2; bestBg = key; }
         }
         if (bestBg) return bestBg;
-        // 2. nearest non-moved node within LINK_DIST → adopt its bg
+        // 2. nearest non-moved node within LINK_DIST → adopt its bg (this is
+        //    how a 2nd node dropped next to a lone floater forms a cluster)
         let nearBg: string | null = null;
         let nearD2 = LINK_DIST_SQ;
         for (const other of gNodes) {
@@ -1836,16 +1866,10 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     const onKeyDownC = (ev: KeyboardEvent) => {
       if (ev.repeat) return;
       if (isTypingTarget(ev.target)) return;
-      if (ev.key === 'c' || ev.key === 'C') {
-        cKeyDown = true;
-        console.log('[spread] C down, selectedIds:', selectedIds.size);
-      }
+      if (ev.key === 'c' || ev.key === 'C') cKeyDown = true;
     };
     const onKeyUpC = (ev: KeyboardEvent) => {
-      if (ev.key === 'c' || ev.key === 'C') {
-        cKeyDown = false;
-        console.log('[spread] C up');
-      }
+      if (ev.key === 'c' || ev.key === 'C') cKeyDown = false;
     };
     const onBlurC = () => {
       cKeyDown = false;
@@ -1868,9 +1892,6 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
     };
 
     const onWheelSpread = (ev: WheelEvent) => {
-      if (cKeyDown) {
-        console.log('[spread] wheel while C held, sel:', selectedIds.size, 'deltaY:', ev.deltaY);
-      }
       if (!cKeyDown) return;
       if (selectedIds.size < 2) return;
       // only intercept when the wheel is over the canvas / its wrapper
@@ -2143,8 +2164,29 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       }
       return out;
     };
+    const getClusterHorizons = (): ClusterHorizon[] => {
+      const memberCounts: Record<string, number> = {};
+      for (const n of gNodes) {
+        if (!n._liveBg) continue;
+        memberCounts[n._liveBg] = (memberCounts[n._liveBg] ?? 0) + 1;
+      }
+      const out: ClusterHorizon[] = [];
+      for (const key of Object.keys(hazeState)) {
+        const st = hazeState[key];
+        if (!st || st.a < 0.08) continue;
+        out.push({
+          bg: key,
+          baseBg: key.split('#')[0],
+          x: st.x,
+          y: st.y,
+          r: st.r,
+          members: memberCounts[key] ?? 0,
+        });
+      }
+      return out;
+    };
     runtimeRef.current = { canvas, wrap, zoom, gNodes, applyGraph, wipeHazeForBg };
-    if (apiRef) apiRef.current = { wipeHazeForBg, absorbDissolvingNodes };
+    if (apiRef) apiRef.current = { wipeHazeForBg, absorbDissolvingNodes, getClusterHorizons };
 
     // initial seed from whatever graph was present at mount
     applyGraph(graphRef.current);
@@ -2295,23 +2337,19 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         }
       }
 
-      // trimmed spread (80th percentile) — also excludes dragged nodes
-      const distsByKey: Record<string, number[]> = {};
+      // event-horizon spread: the FURTHEST non-dragged member from the
+      // centroid. the horizon must contain every member (max, not 80th
+      // percentile) — otherwise outliers fall outside the haze, become "free",
+      // and Phase 2 splits them into phantom sub-clusters. that was the
+      // clusters-inside-clusters bug.
       for (const n of gNodes) {
         if (!n._liveBg || n.fx != null) continue;
         const c = liveClusters[n._liveBg];
         if (!c || c.n === 0) continue;
         const dx = (n.x ?? 0) - c.cx;
         const dy = (n.y ?? 0) - c.cy;
-        (distsByKey[n._liveBg] ||= []).push(Math.hypot(dx, dy));
-      }
-      for (const key in liveClusters) {
-        const arr = distsByKey[key];
-        if (!arr || arr.length === 0) continue;
-        arr.sort((a, b) => a - b);
-        const idx = Math.min(arr.length - 1, Math.floor(arr.length * 0.8));
-        const trimmed = arr[idx];
-        liveClusters[key].maxD2 = trimmed * trimmed;
+        const d2 = dx * dx + dy * dy;
+        if (d2 > c.maxD2) c.maxD2 = d2;
       }
       const counts: Record<string, number> = {};
       for (const key in liveClusters) counts[key] = liveClusters[key].n;
@@ -2338,8 +2376,14 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         // but use n (excludes dragged) for centroid/spread math.
         if (live.total >= 2 && live.n >= 1) {
           const compactness = (live.total + 0.8) / (1 + spread / 130);
-          const targetR = Math.max(110, spread * 1.4 + 70);
-          const targetA = Math.min(0.95, compactness * 0.32);
+          // EVENT HORIZON: contain the furthest member + padding, clamped.
+          // this is the cluster's tracked "size" — it grows when you spread
+          // nodes out and shrinks when you pull them tight.
+          const targetR = Math.max(
+            HORIZON_MIN,
+            Math.min(HORIZON_MAX, spread + HORIZON_PAD),
+          );
+          const targetA = Math.min(0.95, compactness * 0.34);
           const radiusLerp = targetR > st.r ? lerp : shrinkLerp;
           const alphaLerp = targetA > st.a ? lerp : shrinkLerp;
           st.x += (live.cx - st.x) * lerp;
@@ -2367,6 +2411,25 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
       // everyone dragged temporarily, etc). use the popup "clear" or "delete
       // whole cluster" to remove a name explicitly.
 
+      // drag-target feedback: which event horizon is a currently-dragged node
+      // hovering inside? that haze gets a brighter edge ring so the user can
+      // SEE which cluster they're about to drop into. makes in/out seamless.
+      const dragHoverKeys = new Set<string>();
+      for (const n of gNodes) {
+        if (n.fx == null && n.fy == null) continue; // only actively dragged
+        let hoverKey: string | null = null;
+        let hoverD2 = Infinity;
+        for (const key of Object.keys(hazeState)) {
+          if (key.includes('#')) continue;
+          const st = hazeState[key];
+          if (!st || st.a < 0.08) continue;
+          const horizon = st.r * HORIZON_CAPTURE;
+          const d2 = (st.x - (n.fx ?? 0)) ** 2 + (st.y - (n.fy ?? 0)) ** 2;
+          if (d2 < horizon * horizon && d2 < hoverD2) { hoverD2 = d2; hoverKey = key; }
+        }
+        if (hoverKey) dragHoverKeys.add(hoverKey);
+      }
+
       // ===== haze layer (dull mist — source-over so it reads as muted, not luminous) =====
       ctx.save();
       ctx.globalCompositeOperation = 'source-over';
@@ -2390,6 +2453,17 @@ export default function GraphCanvas({ graph, onSelect, onSelectEdge, onClusterCl
         ctx.beginPath();
         ctx.arc(st.x, st.y, radius, 0, Math.PI * 2);
         ctx.fill();
+
+        // drop-target ring: a dragged node is hovering inside this horizon
+        if (dragHoverKeys.has(key)) {
+          ctx.strokeStyle = hexToRgba(color, 0.5);
+          ctx.lineWidth = 1.5 / currentTransform.k;
+          ctx.setLineDash([6 / currentTransform.k, 5 / currentTransform.k]);
+          ctx.beginPath();
+          ctx.arc(st.x, st.y, radius, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
 
         // three drifting wisps for billowy shape
         for (let i = 0; i < 3; i++) {
