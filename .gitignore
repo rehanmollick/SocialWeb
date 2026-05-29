@@ -9,7 +9,11 @@ dist
 
 data/*.db
 data/*.db-journal
+data/*.db-shm
+data/*.db-wal
 data/*.db.backup-*
+
+tsconfig.tsbuildinfo
 
 .claude/
 
