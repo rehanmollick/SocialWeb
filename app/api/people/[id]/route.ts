@@ -9,23 +9,20 @@ export async function PATCH(req: Request, { params }: Context) {
   return handle(async () => {
     const id = idValue((await params).id);
     const patch = personPatch(await payload(req));
-    const person = db.query.people
-      .findFirst({ where: eq(schema.people.id, id) })
-      .sync();
+    const person = await db.query.people.findFirst({
+      where: eq(schema.people.id, id),
+    });
     if (!person) throw new InputError("Person not found.", 404);
     if (
       patch.name &&
-      db.query.people
-        .findMany()
-        .sync()
-        .some(
-          (p) =>
-            p.id !== id && p.name.toLowerCase() === patch.name!.toLowerCase(),
-        )
+      (await db.query.people.findMany()).some(
+        (p) =>
+          p.id !== id && p.name.toLowerCase() === patch.name!.toLowerCase(),
+      )
     )
       throw new InputError("That name already exists.", 409);
-    mutate(`Edit ${person.name}`, () => {
-      resolveSpatialHome(patch);
+    await mutate(`Edit ${person.name}`, async () => {
+      await resolveSpatialHome(patch);
       if (
         patch.bg &&
         patch.bg !== person.bg &&
@@ -35,7 +32,11 @@ export async function PATCH(req: Request, { params }: Context) {
         patch.x = null;
         patch.y = null;
       }
-      db.update(schema.people).set(patch).where(eq(schema.people.id, id)).run();
+      await db
+        .update(schema.people)
+        .set(patch)
+        .where(eq(schema.people.id, id))
+        .run();
     });
     return { ok: true };
   });
@@ -43,12 +44,13 @@ export async function PATCH(req: Request, { params }: Context) {
 export async function DELETE(_req: Request, { params }: Context) {
   return handle(async () => {
     const id = idValue((await params).id);
-    const p = db.query.people
-      .findFirst({ where: eq(schema.people.id, id) })
-      .sync();
+    const p = await db.query.people.findFirst({
+      where: eq(schema.people.id, id),
+    });
     if (!p) throw new InputError("Person not found.", 404);
-    mutate(`Delete ${p.name}`, () => {
-      db.delete(schema.edgeOverrides)
+    await mutate(`Delete ${p.name}`, async () => {
+      await db
+        .delete(schema.edgeOverrides)
         .where(
           or(
             eq(schema.edgeOverrides.aId, id),
@@ -56,7 +58,7 @@ export async function DELETE(_req: Request, { params }: Context) {
           ),
         )
         .run();
-      db.delete(schema.people).where(eq(schema.people.id, id)).run();
+      await db.delete(schema.people).where(eq(schema.people.id, id)).run();
     });
     return { ok: true };
   });

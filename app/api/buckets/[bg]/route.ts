@@ -10,7 +10,7 @@ export async function PATCH(req: Request, { params }: Context) {
     const body = await payload(req);
     const name = textValue(body.name, "name", 100);
     if (!name) throw new InputError("Name the group.");
-    mutate("Rename group", () =>
+    await mutate("Rename group", async () =>
       db
         .insert(schema.bucketNames)
         .values({ bg, name })
@@ -23,13 +23,18 @@ export async function PATCH(req: Request, { params }: Context) {
 export async function DELETE(_req: Request, { params }: Context) {
   return handle(async () => {
     const { bg } = await params;
-    mutate("Dissolve group", () => {
-      db.update(schema.people)
+    await mutate("Dissolve group", async () => {
+      await db
+        .update(schema.people)
         .set({ bg: "online", x: null, y: null })
         .where(eq(schema.people.bg, bg))
         .run();
-      db.delete(schema.bucketNames).where(eq(schema.bucketNames.bg, bg)).run();
-      db.delete(schema.clusterEdges)
+      await db
+        .delete(schema.bucketNames)
+        .where(eq(schema.bucketNames.bg, bg))
+        .run();
+      await db
+        .delete(schema.clusterEdges)
         .where(
           or(eq(schema.clusterEdges.bgA, bg), eq(schema.clusterEdges.bgB, bg)),
         )

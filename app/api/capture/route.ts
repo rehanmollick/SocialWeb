@@ -48,15 +48,15 @@ export async function POST(req: Request) {
     if (!text) throw new InputError("Write something first.");
     if (body.preview === true) return { people: await fileBrainDump(text) };
     const reviewed = items(body.items);
-    const filed = mutate("File brain dump", () => {
-      const all = db.query.people.findMany().sync();
+    const filed = await mutate("File brain dump", async () => {
+      const all = await db.query.people.findMany();
       const ids: number[] = [];
       for (const item of reviewed) {
-        let person =
+        let person: (typeof all)[number] | undefined =
           all.find((p) => p.id === item.personId) ??
           all.find((p) => p.name.toLowerCase() === item.name.toLowerCase());
         if (!person) {
-          person = db
+          person = await db
             .insert(schema.people)
             .values({ name: item.name, bg: "online", strength: 3 })
             .returning()
@@ -75,7 +75,8 @@ export async function POST(req: Request) {
         for (const c of item.circles)
           if (!circles.some((v) => v.toLowerCase() === c.toLowerCase()))
             circles.push(c);
-        db.update(schema.people)
+        await db
+          .update(schema.people)
           .set({
             description: notes,
             circles: JSON.stringify(circles),
@@ -87,13 +88,14 @@ export async function POST(req: Request) {
           .run();
         ids.push(person.id);
       }
-      const memory = db
+      const memory = await db
         .insert(schema.thoughts)
         .values({ body: text, createdAt: Date.now() })
         .returning()
         .get();
       for (const id of new Set(ids))
-        db.insert(schema.mentions)
+        await db
+          .insert(schema.mentions)
           .values({ thoughtId: memory.id, personId: id })
           .run();
       return ids.length;

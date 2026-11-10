@@ -10,14 +10,11 @@ export async function POST(req: Request) {
     const question = textValue(body.question, "question", 4000);
     if (!question) throw new InputError("Ask a question first.");
     const client = aiClient();
-    const people = db.query.people.findMany().sync();
-    const memories = db.query.thoughts.findMany().sync();
-    const mentions = db.query.mentions.findMany().sync();
+    const people = await db.query.people.findMany();
+    const memories = await db.query.thoughts.findMany();
+    const mentions = await db.query.mentions.findMany();
     const names = Object.fromEntries(
-      db.query.bucketNames
-        .findMany()
-        .sync()
-        .map((b) => [b.bg, b.name]),
+      (await db.query.bucketNames.findMany()).map((b) => [b.bg, b.name]),
     );
     const selected = people.find((p) => p.id === body.selectedId);
     const tokens = question
@@ -61,9 +58,7 @@ export async function POST(req: Request) {
       nextStep: p.nextStep,
       lastTouched: p.lastContact,
     }));
-    const relationships = db.query.edgeOverrides
-      .findMany()
-      .sync()
+    const relationships = (await db.query.edgeOverrides.findMany())
       .filter((e) => !e.deleted)
       .map((e) => ({
         a: people.find((p) => p.id === e.aId)?.name,

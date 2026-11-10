@@ -1,3 +1,4 @@
+import { ready } from "./db";
 export class InputError extends Error {
   constructor(
     message: string,
@@ -36,6 +37,7 @@ export function numberValue(v: unknown, min: number, max: number) {
 }
 export async function handle(fn: () => unknown | Promise<unknown>) {
   try {
+    await ready();
     const result = await fn();
     return result instanceof Response ? result : Response.json(result);
   } catch (e) {

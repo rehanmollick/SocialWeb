@@ -1,4 +1,4 @@
-import { sqlite } from "./db";
+import { db, rows, run, sql, transaction } from "./db";
 const tables = [
   "people",
   "thoughts",
@@ -12,15 +12,13 @@ export type Snapshot = {
   version: 2;
   tables: Record<Table, Record<string, unknown>[]>;
 };
-export function snapshot(): Snapshot {
-  return {
-    version: 2,
-    tables: Object.fromEntries(
-      tables.map((t) => [t, sqlite.prepare(`SELECT * FROM ${t}`).all()]),
-    ) as Snapshot["tables"],
-  };
+export async function snapshot(): Promise<Snapshot> {
+  const data = {} as Snapshot["tables"];
+  for (const t of tables)
+    data[t] = await rows(sql`SELECT * FROM ${sql.identifier(t)}`);
+  return { version: 2, tables: data };
 }
-export function validateSnapshot(raw: unknown): Snapshot {
+export async function validateSnapshot(raw: unknown): Promise<Snapshot> {
   if (!raw || typeof raw !== "object" || (raw as Snapshot).version !== 2)
     throw new Error("Choose a SocialWeb version 2 backup.");
   const data = (raw as Snapshot).tables;
@@ -30,10 +28,9 @@ export function validateSnapshot(raw: unknown): Snapshot {
       throw new Error(`Invalid ${table} data.`);
     const columns = new Map(
       (
-        sqlite.prepare(`PRAGMA table_info(${table})`).all() as {
-          name: string;
-          type: string;
-        }[]
+        await rows<{ name: string; type: string }>(
+          sql.raw(`PRAGMA table_info(${table})`),
+        )
       ).map((c) => [c.name, c.type]),
     );
     for (const row of data[table]) {
@@ -85,30 +82,35 @@ export function validateSnapshot(raw: unknown): Snapshot {
   // SQL constraints are additionally checked inside the restore transaction.
   return raw as Snapshot;
 }
-export function restore(data: Snapshot) {
+// Call inside a transaction.
+export async function restore(data: Snapshot) {
   for (const table of [...tables].reverse())
-    sqlite.prepare(`DELETE FROM ${table}`).run();
+    await run(sql`DELETE FROM ${sql.identifier(table)}`);
   for (const table of tables)
     for (const row of data.tables[table]) {
       const keys = Object.keys(row);
-      sqlite
-        .prepare(
-          `INSERT INTO ${table} (${keys.map((k) => `"${k}"`).join(",")}) VALUES (${keys.map(() => "?").join(",")})`,
-        )
-        .run(...Object.values(row));
+      await run(
+        sql`INSERT INTO ${sql.identifier(table)} (${sql.join(
+          keys.map((k) => sql.identifier(k)),
+          sql`,`,
+        )}) VALUES (${sql.join(
+          Object.values(row).map((v) => sql`${v}`),
+          sql`,`,
+        )})`,
+      );
     }
 }
-export function mutate<T>(label: string, fn: () => T): T {
-  return sqlite.transaction(() => {
-    sqlite
-      .prepare("INSERT INTO history(label,snapshot,created_at) VALUES (?,?,?)")
-      .run(label, JSON.stringify(snapshot()), Date.now());
-    const result = fn();
-    sqlite
-      .prepare(
-        "DELETE FROM history WHERE id NOT IN (SELECT id FROM history ORDER BY id DESC LIMIT 25)",
-      )
-      .run();
+// Run a change with a snapshot taken first, so Undo can put everything back.
+export function mutate<T>(label: string, fn: () => T | Promise<T>): Promise<T> {
+  return transaction(async () => {
+    await run(
+      sql`INSERT INTO history(label,snapshot,created_at) VALUES (${label},${JSON.stringify(await snapshot())},${Date.now()})`,
+    );
+    const result = await fn();
+    await run(
+      sql`DELETE FROM history WHERE id NOT IN (SELECT id FROM history ORDER BY id DESC LIMIT 25)`,
+    );
     return result;
-  })();
+  });
 }
+export { db };

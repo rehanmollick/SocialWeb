@@ -8,36 +8,32 @@ async function update(req: Request, deleted = false) {
     const body = await payload(req);
     const ids = [idValue(body.a), idValue(body.b)].sort((a, b) => a - b);
     const [a, b] = ids;
-    if (
-      a === b ||
-      ids.some(
-        (id) =>
-          !db.query.people
-            .findFirst({ where: eq(schema.people.id, id) })
-            .sync(),
-      )
-    )
+    const known = new Set((await db.query.people.findMany()).map((p) => p.id));
+    if (a === b || ids.some((id) => !known.has(id)))
       throw new InputError("Choose two existing people.");
     const weight = deleted ? null : numberValue(body.weight ?? 3, 0, 10);
-    mutate(deleted ? "Remove connection" : "Edit connection", () => {
-      const old = db.query.edgeOverrides
-        .findFirst({
+    await mutate(
+      deleted ? "Remove connection" : "Edit connection",
+      async () => {
+        const old = await db.query.edgeOverrides.findFirst({
           where: and(
             eq(schema.edgeOverrides.aId, a),
             eq(schema.edgeOverrides.bId, b),
           ),
-        })
-        .sync();
-      if (old)
-        db.update(schema.edgeOverrides)
-          .set({ weight, deleted })
-          .where(eq(schema.edgeOverrides.id, old.id))
-          .run();
-      else
-        db.insert(schema.edgeOverrides)
-          .values({ aId: a, bId: b, weight, deleted })
-          .run();
-    });
+        });
+        if (old)
+          await db
+            .update(schema.edgeOverrides)
+            .set({ weight, deleted })
+            .where(eq(schema.edgeOverrides.id, old.id))
+            .run();
+        else
+          await db
+            .insert(schema.edgeOverrides)
+            .values({ aId: a, bId: b, weight, deleted })
+            .run();
+      },
+    );
     return { ok: true };
   });
 }

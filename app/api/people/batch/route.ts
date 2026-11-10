@@ -19,14 +19,12 @@ export async function POST(req: Request) {
       if (!p.name) throw new InputError("Every person needs a name.");
       return p;
     });
-    const ids = mutate(`Add ${patches.length} people`, () => {
+    const ids = await mutate(`Add ${patches.length} people`, async () => {
       const names = new Set(
-        db.query.people
-          .findMany()
-          .sync()
-          .map((p) => p.name.toLowerCase()),
+        (await db.query.people.findMany()).map((p) => p.name.toLowerCase()),
       );
-      return patches.map((p) => {
+      const created: number[] = [];
+      for (const p of patches) {
         const name = p.name!;
         if (names.has(name.toLowerCase()))
           throw new InputError(
@@ -34,13 +32,18 @@ export async function POST(req: Request) {
             409,
           );
         names.add(name.toLowerCase());
-        resolveSpatialHome(p);
-        return db
-          .insert(schema.people)
-          .values({ ...p, name, createdAt: Date.now() })
-          .returning()
-          .get().id;
-      });
+        await resolveSpatialHome(p);
+        created.push(
+          (
+            await db
+              .insert(schema.people)
+              .values({ ...p, name, createdAt: Date.now() })
+              .returning()
+              .get()
+          ).id,
+        );
+      }
+      return created;
     });
     return { ok: true, ids };
   });

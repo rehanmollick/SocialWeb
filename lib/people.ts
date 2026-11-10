@@ -3,20 +3,19 @@ import { stringList } from "./graph/types";
 import { db, schema } from "./db";
 
 // Call inside the same transaction as the person write, so Undo is one action.
-export function resolveSpatialHome(
+export async function resolveSpatialHome(
   patch: Partial<typeof schema.people.$inferInsert>,
 ) {
   if (!patch.bg?.startsWith("group:")) return;
   const name = patch.bg.slice(6).trim();
   if (!name || name.length > 80)
     throw new InputError("Choose a group name under 80 characters.");
-  const existing = db.query.bucketNames
-    .findMany()
-    .sync()
-    .find((g) => g.name.toLowerCase() === name.toLowerCase());
+  const existing = (await db.query.bucketNames.findMany()).find(
+    (g) => g.name.toLowerCase() === name.toLowerCase(),
+  );
   patch.bg = existing?.bg ?? `g-${crypto.randomUUID()}`;
   if (!existing)
-    db.insert(schema.bucketNames).values({ bg: patch.bg, name }).run();
+    await db.insert(schema.bucketNames).values({ bg: patch.bg, name }).run();
 }
 export function personPatch(body: Record<string, unknown>) {
   const patch: Partial<typeof schema.people.$inferInsert> = {

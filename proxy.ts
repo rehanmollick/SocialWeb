@@ -6,7 +6,7 @@ export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   if (!code) {
     // The phone script exposes the server to the network; never do that open.
-    if (process.env.SOCIALWEB_EXPOSED === "1")
+    if (process.env.SOCIALWEB_EXPOSED === "1" || process.env.VERCEL)
       return new NextResponse("Set APP_PASSCODE before sharing on a network.", {
         status: 503,
       });

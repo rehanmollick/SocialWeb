@@ -1,14 +1,13 @@
-import { db } from "@/lib/db";
+import { db, ready } from "@/lib/db";
 import { stringList } from "@/lib/graph/types";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export async function GET() {
-  const people = db.query.people.findMany().sync();
-  const buckets = db.query.bucketNames.findMany().sync();
+  await ready();
+  const people = await db.query.people.findMany();
+  const buckets = await db.query.bucketNames.findMany();
   const valid = new Set(people.map((p) => p.id));
-  const edges = db.query.edgeOverrides
-    .findMany()
-    .sync()
+  const edges = (await db.query.edgeOverrides.findMany())
     .filter(
       (e) =>
         !e.deleted && e.aId !== e.bId && valid.has(e.aId) && valid.has(e.bId),
@@ -31,9 +30,10 @@ export async function GET() {
     bucketRopes: Object.fromEntries(
       buckets.map((b) => [b.bg, { weight: b.meWeight, hidden: b.meHidden }]),
     ),
-    clusterEdges: db.query.clusterEdges
-      .findMany()
-      .sync()
-      .map((e) => ({ a: e.bgA, b: e.bgB, weight: e.weight })),
+    clusterEdges: (await db.query.clusterEdges.findMany()).map((e) => ({
+      a: e.bgA,
+      b: e.bgB,
+      weight: e.weight,
+    })),
   });
 }

@@ -8,9 +8,9 @@ export const runtime = "nodejs";
 export async function POST(req: Request) {
   return handle(async () => {
     const id = idValue((await payload(req)).personId);
-    const person = db.query.people
-      .findFirst({ where: eq(schema.people.id, id) })
-      .sync();
+    const person = await db.query.people.findFirst({
+      where: eq(schema.people.id, id),
+    });
     if (!person) throw new InputError("Person not found.", 404);
     if (person.description.trim().length < 12)
       return { circles: [], nextStep: "" };

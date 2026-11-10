@@ -28,20 +28,19 @@ export async function POST(req: Request) {
           : {}),
       };
     });
-    mutate("Arrange map", () => {
-      const ids = new Set(
-        db.query.people
-          .findMany()
-          .sync()
-          .map((p) => p.id),
-      );
+    await mutate("Arrange map", async () => {
+      const ids = new Set((await db.query.people.findMany()).map((p) => p.id));
       if (
         points.some((p) => !ids.has(p.id) || p.bg === "") ||
         new Set(points.map((p) => p.id)).size !== points.length
       )
         throw new InputError("Invalid people in arrangement.");
       for (const { id, ...pos } of points)
-        db.update(schema.people).set(pos).where(eq(schema.people.id, id)).run();
+        await db
+          .update(schema.people)
+          .set(pos)
+          .where(eq(schema.people.id, id))
+          .run();
     });
     return { ok: true };
   });

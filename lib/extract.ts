@@ -10,7 +10,7 @@ export type ExtractedPerson = {
 export type Extraction = { people: ExtractedPerson[] };
 // Suggestions only. Human judgments and spatial membership are never inferred here.
 export async function extractPeople(body: string): Promise<Extraction> {
-  const known = db.query.people.findMany().sync();
+  const known = await db.query.people.findMany();
   if (!process.env.ANTHROPIC_API_KEY)
     return {
       people: known
