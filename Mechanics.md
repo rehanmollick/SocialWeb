@@ -1,5 +1,7 @@
 # SocialWeb — Mechanics Spec
 
+> Historical prototype reference. The September 2026 rebuild supersedes this specification; see `REBUILD_NOTES.md` for the current mechanics. The canonical-status statement below applies only to the earlier implementation.
+
 The canonical reference for how the graph behaves. If the code disagrees with this
 doc, the doc is the intent and the code is the bug.
 

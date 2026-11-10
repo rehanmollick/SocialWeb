@@ -1,60 +1,46 @@
-import { NextResponse } from 'next/server';
-import { and, eq } from 'drizzle-orm';
-import { db, schema } from '@/lib/db';
-
-export const runtime = 'nodejs';
-export const dynamic = 'force-dynamic';
-
-function ordered(a: number, b: number): [number, number] {
-  return a < b ? [a, b] : [b, a];
-}
-
-async function upsert(aId: number, bId: number, patch: { weight?: number | null; deleted?: boolean }) {
-  const existing = await db.query.edgeOverrides.findFirst({
-    where: and(eq(schema.edgeOverrides.aId, aId), eq(schema.edgeOverrides.bId, bId)),
-  });
-  if (existing) {
-    await db
-      .update(schema.edgeOverrides)
-      .set(patch)
-      .where(eq(schema.edgeOverrides.id, existing.id));
-  } else {
-    await db.insert(schema.edgeOverrides).values({
-      aId,
-      bId,
-      weight: patch.weight ?? null,
-      deleted: patch.deleted ?? false,
+import { eq, and } from "drizzle-orm";
+import { db, schema } from "@/lib/db";
+import { handle, payload, idValue, numberValue, InputError } from "@/lib/http";
+import { mutate } from "@/lib/history";
+export const runtime = "nodejs";
+async function update(req: Request, deleted = false) {
+  return handle(async () => {
+    const body = await payload(req);
+    const ids = [idValue(body.a), idValue(body.b)].sort((a, b) => a - b);
+    const [a, b] = ids;
+    if (
+      a === b ||
+      ids.some(
+        (id) =>
+          !db.query.people
+            .findFirst({ where: eq(schema.people.id, id) })
+            .sync(),
+      )
+    )
+      throw new InputError("Choose two existing people.");
+    const weight = deleted ? null : numberValue(body.weight ?? 3, 0, 10);
+    mutate(deleted ? "Remove connection" : "Edit connection", () => {
+      const old = db.query.edgeOverrides
+        .findFirst({
+          where: and(
+            eq(schema.edgeOverrides.aId, a),
+            eq(schema.edgeOverrides.bId, b),
+          ),
+        })
+        .sync();
+      if (old)
+        db.update(schema.edgeOverrides)
+          .set({ weight, deleted })
+          .where(eq(schema.edgeOverrides.id, old.id))
+          .run();
+      else
+        db.insert(schema.edgeOverrides)
+          .values({ aId: a, bId: b, weight, deleted })
+          .run();
     });
-  }
+    return { ok: true };
+  });
 }
-
-export async function POST(req: Request) {
-  const body = (await req.json()) as { a: number; b: number; weight?: number };
-  if (!Number.isFinite(body.a) || !Number.isFinite(body.b) || body.a === body.b) {
-    return NextResponse.json({ error: 'bad payload' }, { status: 400 });
-  }
-  const [a, b] = ordered(body.a, body.b);
-  const weight = typeof body.weight === 'number' ? Math.max(0, body.weight) : 1;
-  await upsert(a, b, { weight, deleted: false });
-  return NextResponse.json({ ok: true });
-}
-
-export async function PATCH(req: Request) {
-  const body = (await req.json()) as { a: number; b: number; weight: number };
-  if (!Number.isFinite(body.a) || !Number.isFinite(body.b) || !Number.isFinite(body.weight)) {
-    return NextResponse.json({ error: 'bad payload' }, { status: 400 });
-  }
-  const [a, b] = ordered(body.a, body.b);
-  await upsert(a, b, { weight: Math.max(0, body.weight), deleted: false });
-  return NextResponse.json({ ok: true });
-}
-
-export async function DELETE(req: Request) {
-  const body = (await req.json()) as { a: number; b: number };
-  if (!Number.isFinite(body.a) || !Number.isFinite(body.b)) {
-    return NextResponse.json({ error: 'bad payload' }, { status: 400 });
-  }
-  const [a, b] = ordered(body.a, body.b);
-  await upsert(a, b, { deleted: true });
-  return NextResponse.json({ ok: true });
-}
+export const POST = (req: Request) => update(req);
+export const PATCH = (req: Request) => update(req);
+export const DELETE = (req: Request) => update(req, true);

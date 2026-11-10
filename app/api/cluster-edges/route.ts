@@ -1,57 +1,48 @@
-import { NextResponse } from 'next/server';
-import { and, eq } from 'drizzle-orm';
-import { db, schema } from '@/lib/db';
-
-export const runtime = 'nodejs';
-export const dynamic = 'force-dynamic';
-
-function orderPair(a: string, b: string): [string, string] {
-  return a < b ? [a, b] : [b, a];
-}
-
-export async function POST(req: Request) {
-  const body = (await req.json()) as { bgA?: string; bgB?: string; weight?: number };
-  if (!body.bgA || !body.bgB || body.bgA === body.bgB) {
-    return NextResponse.json({ error: 'bad payload' }, { status: 400 });
-  }
-  const [a, b] = orderPair(body.bgA, body.bgB);
-  const w = typeof body.weight === 'number' ? Math.max(0, Math.min(10, body.weight)) : 5;
-  const existing = await db.query.clusterEdges.findFirst({
-    where: and(eq(schema.clusterEdges.bgA, a), eq(schema.clusterEdges.bgB, b)),
+import { and, eq } from "drizzle-orm";
+import { db, schema } from "@/lib/db";
+import {
+  handle,
+  payload,
+  textValue,
+  numberValue,
+  InputError,
+} from "@/lib/http";
+import { mutate } from "@/lib/history";
+export const runtime = "nodejs";
+async function update(req: Request, remove = false) {
+  return handle(async () => {
+    const body = await payload(req);
+    const [a, b] = [
+      textValue(body.bgA, "group", 100),
+      textValue(body.bgB, "group", 100),
+    ].sort();
+    const groups = new Set(
+      db.query.people
+        .findMany()
+        .sync()
+        .map((p) => p.bg),
+    );
+    if (a === b || !groups.has(a) || !groups.has(b))
+      throw new InputError("Choose two populated groups.");
+    const weight = remove ? 0 : numberValue(body.weight ?? 5, 0, 10);
+    mutate(remove ? "Remove group connection" : "Edit group connection", () => {
+      const where = and(
+        eq(schema.clusterEdges.bgA, a),
+        eq(schema.clusterEdges.bgB, b),
+      );
+      if (remove) {
+        db.delete(schema.clusterEdges).where(where).run();
+        return;
+      }
+      const existing = db.query.clusterEdges.findFirst({ where }).sync();
+      if (existing)
+        db.update(schema.clusterEdges).set({ weight }).where(where).run();
+      else
+        db.insert(schema.clusterEdges).values({ bgA: a, bgB: b, weight }).run();
+    });
+    return { ok: true };
   });
-  if (existing) {
-    await db
-      .update(schema.clusterEdges)
-      .set({ weight: w })
-      .where(eq(schema.clusterEdges.id, existing.id));
-  } else {
-    await db.insert(schema.clusterEdges).values({ bgA: a, bgB: b, weight: w });
-  }
-  return NextResponse.json({ ok: true });
 }
-
-export async function PATCH(req: Request) {
-  const body = (await req.json()) as { bgA?: string; bgB?: string; weight?: number };
-  if (!body.bgA || !body.bgB || typeof body.weight !== 'number') {
-    return NextResponse.json({ error: 'bad payload' }, { status: 400 });
-  }
-  const [a, b] = orderPair(body.bgA, body.bgB);
-  const w = Math.max(0, Math.min(10, body.weight));
-  await db
-    .update(schema.clusterEdges)
-    .set({ weight: w })
-    .where(and(eq(schema.clusterEdges.bgA, a), eq(schema.clusterEdges.bgB, b)));
-  return NextResponse.json({ ok: true });
-}
-
-export async function DELETE(req: Request) {
-  const body = (await req.json()) as { bgA?: string; bgB?: string };
-  if (!body.bgA || !body.bgB) {
-    return NextResponse.json({ error: 'bad payload' }, { status: 400 });
-  }
-  const [a, b] = orderPair(body.bgA, body.bgB);
-  await db
-    .delete(schema.clusterEdges)
-    .where(and(eq(schema.clusterEdges.bgA, a), eq(schema.clusterEdges.bgB, b)));
-  return NextResponse.json({ ok: true });
-}
+export const POST = (req: Request) => update(req);
+export const PATCH = (req: Request) => update(req);
+export const DELETE = (req: Request) => update(req, true);

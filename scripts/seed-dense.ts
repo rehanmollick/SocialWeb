@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 
-const db = new Database('data/memory.db');
+if (!process.env.DB_PATH || process.env.DB_PATH === 'data/memory.db') throw new Error('Set DB_PATH to a disposable test database. Seeding your personal database is disabled.');
+const db = new Database(process.env.DB_PATH);
 db.pragma('foreign_keys = ON');
 
 const now = Date.now();

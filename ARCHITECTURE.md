@@ -1,5 +1,7 @@
 # SocialWeb — Cluster & Physics Architecture
 
+> Historical prototype reference. Superseded by the September 2026 rebuild described in `REBUILD_NOTES.md`. The mechanics below are not the current implementation contract.
+
 ## Core Mental Model
 
 You are the center (origin 0,0). People orbit you in **clusters** (groups sharing a

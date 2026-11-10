@@ -1,18 +1,18 @@
-import Database from 'better-sqlite3';
-import { drizzle } from 'drizzle-orm/better-sqlite3';
-import { mkdirSync, existsSync } from 'node:fs';
-import { dirname } from 'node:path';
-import * as schema from './schema';
+import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import { mkdirSync, existsSync } from "node:fs";
+import { dirname } from "node:path";
+import * as schema from "./schema";
 
-const DB_PATH = process.env.DB_PATH || 'data/memory.db';
+const DB_PATH = process.env.DB_PATH || "data/memory.db";
 
 if (!existsSync(dirname(DB_PATH))) {
   mkdirSync(dirname(DB_PATH), { recursive: true });
 }
 
-const sqlite = new Database(DB_PATH);
-sqlite.pragma('journal_mode = WAL');
-sqlite.pragma('foreign_keys = ON');
+export const sqlite = new Database(DB_PATH);
+sqlite.pragma("journal_mode = WAL");
+sqlite.pragma("foreign_keys = ON");
 
 sqlite.exec(`
   CREATE TABLE IF NOT EXISTS people (
@@ -58,29 +58,44 @@ sqlite.exec(`
   );
 `);
 
-// runtime migration: add description + pin_to_me columns if missing
-const peopleCols = sqlite.prepare("PRAGMA table_info(people)").all() as { name: string }[];
-if (!peopleCols.some((c) => c.name === 'description')) {
-  sqlite.exec("ALTER TABLE people ADD COLUMN description TEXT NOT NULL DEFAULT ''");
-}
-if (!peopleCols.some((c) => c.name === 'pin_to_me')) {
-  sqlite.exec("ALTER TABLE people ADD COLUMN pin_to_me INTEGER NOT NULL DEFAULT 0");
-}
-if (!peopleCols.some((c) => c.name === 'x')) {
-  sqlite.exec('ALTER TABLE people ADD COLUMN x REAL');
-}
-if (!peopleCols.some((c) => c.name === 'y')) {
-  sqlite.exec('ALTER TABLE people ADD COLUMN y REAL');
-}
+// Runtime migrations. Next's build and dev server load this module from several
+// processes at once, so the check-then-ALTER must hold the write lock or two
+// workers both see a missing column and the second one crashes.
+sqlite.pragma("busy_timeout = 5000");
+sqlite
+  .transaction(() => {
+    const addMissing = (table: string, columns: Record<string, string>) => {
+      const existing = new Set(
+        (
+          sqlite.prepare(`PRAGMA table_info(${table})`).all() as {
+            name: string;
+          }[]
+        ).map((c) => c.name),
+      );
+      for (const [name, definition] of Object.entries(columns))
+        if (!existing.has(name))
+          sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
+    };
+    addMissing("people", {
+      description: "TEXT NOT NULL DEFAULT ''",
+      pin_to_me: "INTEGER NOT NULL DEFAULT 0",
+      x: "REAL",
+      y: "REAL",
+      circles: "TEXT NOT NULL DEFAULT '[]'",
+      last_contact: "TEXT NOT NULL DEFAULT ''",
+      follow_up: "TEXT NOT NULL DEFAULT ''",
+      next_step: "TEXT NOT NULL DEFAULT ''",
+    });
+    addMissing("bucket_names", {
+      me_weight: "REAL",
+      me_hidden: "INTEGER NOT NULL DEFAULT 0",
+    });
+    sqlite.exec(
+      `CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL, snapshot TEXT NOT NULL, created_at INTEGER NOT NULL)`,
+    );
+  })
+  .immediate();
 
-// runtime migration: bucket rope overrides
-const bucketCols = sqlite.prepare("PRAGMA table_info(bucket_names)").all() as { name: string }[];
-if (!bucketCols.some((c) => c.name === 'me_weight')) {
-  sqlite.exec("ALTER TABLE bucket_names ADD COLUMN me_weight REAL");
-}
-if (!bucketCols.some((c) => c.name === 'me_hidden')) {
-  sqlite.exec("ALTER TABLE bucket_names ADD COLUMN me_hidden INTEGER NOT NULL DEFAULT 0");
-}
 
 export const db = drizzle(sqlite, { schema });
 export { schema };

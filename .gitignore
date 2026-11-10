@@ -26,3 +26,7 @@ yarn-error.log*
 .vercel
 next-env.d.ts
 .turbo
+
+data/backups/
+test-results/
+playwright-report/
