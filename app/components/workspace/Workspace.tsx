@@ -180,6 +180,7 @@ export default function Workspace() {
         setLegend(false);
         setRightOpen(false);
         setLeftOpen(false);
+        setView((v) => (v === "people" ? lastMap.current : v));
       }
     };
     window.addEventListener("keydown", onKey);
@@ -286,11 +287,20 @@ export default function Workspace() {
     [memories, graph.nodes, query, lens, circle, group],
   );
   const person = graph.nodes.find((p) => p.id === selected) ?? null;
+  // The list and memories lie over whichever arrangement was showing, and each
+  // map stays mounted once opened, so toggling never rebuilds or re-settles it.
+  const lastMap = useRef<"map" | "doing">("map");
+  if (view === "map" || view === "doing") lastMap.current = view;
+  const shown = lastMap.current;
+  const [doingOpened, setDoingOpened] = useState(false);
+  useEffect(() => {
+    if (view === "doing") setDoingOpened(true);
+  }, [view]);
   const radarItems = useMemo(() => findNudges(graph.nodes), [graph.nodes]);
   const doing = useMemo(() => {
     const names = [...new Set(graph.nodes.flatMap((p) => p.circles))].sort();
     const key = (p: Person, c: string) =>
-      p.id * SLOTS + (c ? names.indexOf(c) + 1 : 0);
+      -(p.id * SLOTS + (c ? names.indexOf(c) + 1 : 0));
     return {
       names,
       key,
@@ -318,7 +328,7 @@ export default function Workspace() {
     () =>
       new Set(
         doing.graph.nodes
-          .filter((n) => matches.has(Math.floor(n.id / SLOTS)))
+          .filter((n) => matches.has(Math.floor(-n.id / SLOTS)))
           .map((n) => n.id),
       ),
     [doing, matches],
@@ -373,7 +383,9 @@ export default function Workspace() {
             className="subtle"
             aria-pressed={view === "people"}
             title="Everyone as a list"
-            onClick={() => setView((v) => (v === "people" ? "map" : "people"))}
+            onClick={() =>
+              setView((v) => (v === "people" ? lastMap.current : "people"))
+            }
           >
             ☰ List
           </button>
@@ -641,8 +653,8 @@ export default function Workspace() {
             >
               <button
                 role="tab"
-                aria-selected={view === "map"}
-                className={view === "map" ? "active" : ""}
+                aria-selected={shown === "map"}
+                className={shown === "map" ? "active" : ""}
                 title="Grouped by how you know them"
                 onClick={() => setView("map")}
               >
@@ -650,8 +662,8 @@ export default function Workspace() {
               </button>
               <button
                 role="tab"
-                aria-selected={view === "doing"}
-                className={view === "doing" ? "active" : ""}
+                aria-selected={shown === "doing"}
+                className={shown === "doing" ? "active" : ""}
                 title="Grouped by what you do together"
                 onClick={() => setView("doing")}
               >
@@ -703,237 +715,251 @@ export default function Workspace() {
                   : "Bringing your world into focus…"}
               </h2>
             </div>
-          ) : view === "map" ? (
-            <div className="map-wrap">
-              <RelationshipMap
-                key="map"
-                onCreate={(point) => {
-                  setAddPoint(point);
-                  setAddDrafts((previous) =>
-                    previous[addDraftKey]
-                      ? {
-                          ...previous,
-                          [addDraftKey]: {
-                            ...previous[addDraftKey],
-                            bg: point.bg,
-                            point,
-                          },
-                        }
-                      : previous,
-                  );
-                  showTool("add");
-                }}
-                graph={graph}
-                onLegend={() => showTool("legend")}
-                selected={selected}
-                matches={matches}
-                filtering={filtering}
-                onSelect={select}
-                focus={focus}
-                onGroup={(bg) => {
-                  setGroup(bg);
-                  setNotice(
-                    `Viewing ${groupName(bg, graph.bucketNames)}. Use Settings to rename groups.`,
-                  );
-                }}
-                onMove={async (id, x, y, bg, positions) => {
-                  await action(
-                    () =>
-                      api("people/positions", "POST", {
-                        positions: positions.map((p) =>
-                          p.id === id ? { ...p, x, y, bg } : p,
-                        ),
-                      }),
-                    "Position and spatial home saved. Circles preserved.",
-                  ).catch(() => {});
-                }}
-                onArrange={async (positions) => {
-                  await action(
-                    () => api("people/positions", "POST", { positions }),
-                    "Group arrangement saved.",
-                  ).catch(() => {});
-                }}
-              />
-              {!graph.nodes.length && (
-                <div className="map-empty">
-                  <span>✧</span>
-                  <h2>Start with someone who matters.</h2>
-                  <p>
-                    A close friend. A creative partner. Someone who opens a
-                    door.
-                    <br />
-                    Your world grows one connection at a time.
-                  </p>
-                  <button
-                    className="primary"
-                    onClick={() => {
-                      showTool("add");
-                      setAddPoint(addDrafts[addDraftKey]?.point ?? null);
-                    }}
-                  >
-                    + Add your first person
-                  </button>
-                </div>
-              )}
-            </div>
-          ) : view === "doing" ? (
-            <div className="map-wrap">
-              <RelationshipMap
-                key="doing"
-                hint="Drag someone into a circle to add them · Drop outside to remove"
-                graph={doing.graph}
-                onLegend={() => showTool("legend")}
-                selected={
-                  person ? doing.key(person, person.circles[0] ?? "") : null
-                }
-                matches={doingMatches}
-                filtering={filtering}
-                onSelect={(id) => select(Math.floor(id / SLOTS))}
-                focus={focus}
-                onGroup={(bg) => {
-                  const name = bg.slice(NO_CIRCLE.length);
-                  setCircle(name);
-                  setNotice(
-                    name
-                      ? `Showing everyone in ${name}.`
-                      : "People with nothing going on yet. Drag one into a circle.",
-                  );
-                }}
-                onMove={async (id, _x, _y, bg) => {
-                  const who = graph.nodes.find(
-                    (p) => p.id === Math.floor(id / SLOTS),
-                  );
-                  if (!who) return;
-                  const from = doing.names[(id % SLOTS) - 1] ?? "";
-                  const to = bg.startsWith(NO_CIRCLE)
-                    ? bg.slice(NO_CIRCLE.length)
-                    : "";
-                  if (to === from && bg.startsWith(NO_CIRCLE)) return;
-                  const circles = who.circles.filter((c) => c !== from);
-                  if (to && !circles.includes(to)) circles.push(to);
-                  await action(
-                    () => api(`people/${who.id}`, "PATCH", { circles }),
-                    to
-                      ? `${who.name} is now in ${to}.`
-                      : `${who.name} left ${from || "the circle"}.`,
-                  ).catch(() => {});
-                }}
-                onArrange={async () => {}}
-              />
-              {!doing.names.length && (
-                <div className="map-empty doing-empty">
-                  <span>✦</span>
-                  <h2>Nothing going on yet.</h2>
-                  <p>
-                    Open someone and write a line about what you do together, or
-                    use Brain dump. Circles appear here as you add them.
-                  </p>
-                </div>
-              )}
-            </div>
-          ) : view === "people" ? (
-            <div className="content-scroll">
-              <div className="people-grid">{filtered.map(card)}</div>
-              {!filtered.length && (
-                <div className="empty-state">
-                  <h2>
-                    {filtering
-                      ? "No people match those filters."
-                      : "Your people will appear here."}
-                  </h2>
-                  <p>
-                    {filtering
-                      ? "Try a name, circle, or something from their profile."
-                      : "Add someone to start your map."}
-                  </p>
-                  {filtering && <button onClick={clear}>Clear filters</button>}
-                </div>
-              )}
-            </div>
           ) : (
-            <div className="content-scroll">
-              <div className="memory-feed">
-                {filteredMemories.map((m) => (
-                  <article className="memory-card" key={m.id}>
-                    <div className="label-row">
-                      <time>
-                        {new Date(m.createdAt).toLocaleString(undefined, {
-                          month: "long",
-                          day: "numeric",
-                          hour: "numeric",
-                          minute: "2-digit",
-                        })}
-                      </time>
-                      <button
-                        className="subtle"
-                        aria-label="Edit memory"
-                        onClick={() => {
-                          setMemoryDraft(m);
-                          showTool("memory");
-                        }}
-                      >
-                        Edit
-                      </button>
-                      <button
-                        className="subtle"
-                        aria-label="Delete memory"
-                        disabled={busy}
-                        onClick={() =>
-                          run(
-                            () => api("memories", "DELETE", { id: m.id }),
-                            "Memory deleted. Undo is available.",
-                          )
-                        }
-                      >
-                        ×
-                      </button>
-                    </div>
-                    <p>{m.body}</p>
-                    <div className="chip-row">
-                      {m.personIds.map((id) => {
-                        const p = graph.nodes.find((p) => p.id === id);
-                        return (
-                          p && (
-                            <button
-                              className="chip"
-                              key={id}
-                              onClick={() => select(id)}
-                            >
-                              {p.name} ↗
-                            </button>
-                          )
-                        );
-                      })}
-                    </div>
-                  </article>
-                ))}
-              </div>
-              {!filteredMemories.length && (
-                <div className="empty-state">
-                  <h2>
-                    {memories.length
-                      ? "No memories match those filters."
-                      : "Save the details you’ll want later."}
-                  </h2>
-                  <p>
-                    {memories.length
-                      ? "Try words from a memory or the name of someone linked to it."
-                      : "Conversations, ideas, introductions, and things you promised."}
-                  </p>
-                  {filtering && <button onClick={clear}>Clear filters</button>}
-                  {!memories.length && (
+            <>
+              <div
+                className={`map-wrap ${shown === "map" ? "" : "map-hidden"}`}
+              >
+                <RelationshipMap
+                  key="map"
+                  onCreate={(point) => {
+                    setAddPoint(point);
+                    setAddDrafts((previous) =>
+                      previous[addDraftKey]
+                        ? {
+                            ...previous,
+                            [addDraftKey]: {
+                              ...previous[addDraftKey],
+                              bg: point.bg,
+                              point,
+                            },
+                          }
+                        : previous,
+                    );
+                    showTool("add");
+                  }}
+                  graph={graph}
+                  onLegend={() => showTool("legend")}
+                  selected={selected}
+                  matches={matches}
+                  filtering={filtering}
+                  onSelect={select}
+                  focus={focus}
+                  onGroup={(bg) => {
+                    setGroup(bg);
+                    setNotice(
+                      `Viewing ${groupName(bg, graph.bucketNames)}. Use Settings to rename groups.`,
+                    );
+                  }}
+                  onMove={async (id, x, y, bg, positions) => {
+                    await action(
+                      () =>
+                        api("people/positions", "POST", {
+                          positions: positions.map((p) =>
+                            p.id === id ? { ...p, x, y, bg } : p,
+                          ),
+                        }),
+                      "Position and spatial home saved. Circles preserved.",
+                    ).catch(() => {});
+                  }}
+                  onArrange={async (positions) => {
+                    await action(
+                      () => api("people/positions", "POST", { positions }),
+                      "Group arrangement saved.",
+                    ).catch(() => {});
+                  }}
+                />
+                {!graph.nodes.length && (
+                  <div className="map-empty">
+                    <span>✧</span>
+                    <h2>Start with someone who matters.</h2>
+                    <p>
+                      A close friend. A creative partner. Someone who opens a
+                      door.
+                      <br />
+                      Your world grows one connection at a time.
+                    </p>
                     <button
+                      className="primary"
                       onClick={() => {
-                        setMemoryDraft(null);
-                        showTool("memory");
+                        showTool("add");
+                        setAddPoint(addDrafts[addDraftKey]?.point ?? null);
                       }}
                     >
-                      + Add a memory
+                      + Add your first person
                     </button>
+                  </div>
+                )}
+              </div>
+              {doingOpened && (
+                <div
+                  className={`map-wrap ${shown === "doing" ? "" : "map-hidden"}`}
+                >
+                  <RelationshipMap
+                    key="doing"
+                    hint="Drag someone into a circle to add them · Drop outside to remove"
+                    graph={doing.graph}
+                    onLegend={() => showTool("legend")}
+                    selected={
+                      person ? doing.key(person, person.circles[0] ?? "") : null
+                    }
+                    matches={doingMatches}
+                    filtering={filtering}
+                    onSelect={(id) => select(Math.floor(-id / SLOTS))}
+                    focus={focus}
+                    onGroup={(bg) => {
+                      const name = bg.slice(NO_CIRCLE.length);
+                      setCircle(name);
+                      setNotice(
+                        name
+                          ? `Showing everyone in ${name}.`
+                          : "People with nothing going on yet. Drag one into a circle.",
+                      );
+                    }}
+                    onMove={async (id, _x, _y, bg) => {
+                      const who = graph.nodes.find(
+                        (p) => p.id === Math.floor(-id / SLOTS),
+                      );
+                      if (!who) return;
+                      const from = doing.names[(-id % SLOTS) - 1] ?? "";
+                      const to = bg.startsWith(NO_CIRCLE)
+                        ? bg.slice(NO_CIRCLE.length)
+                        : "";
+                      if (to === from && bg.startsWith(NO_CIRCLE)) return;
+                      const circles = who.circles.filter((c) => c !== from);
+                      if (to && !circles.includes(to)) circles.push(to);
+                      await action(
+                        () => api(`people/${who.id}`, "PATCH", { circles }),
+                        to
+                          ? `${who.name} is now in ${to}.`
+                          : `${who.name} left ${from || "the circle"}.`,
+                      ).catch(() => {});
+                    }}
+                    onArrange={async () => {}}
+                  />
+                  {!doing.names.length && (
+                    <div className="map-empty doing-empty">
+                      <span>✦</span>
+                      <h2>Nothing going on yet.</h2>
+                      <p>
+                        Open someone and write a line about what you do
+                        together, or use Brain dump. Circles appear here as you
+                        add them.
+                      </p>
+                    </div>
                   )}
                 </div>
               )}
-            </div>
+              {view === "people" && (
+                <div className="content-scroll list-overlay">
+                  <div className="people-grid">{filtered.map(card)}</div>
+                  {!filtered.length && (
+                    <div className="empty-state">
+                      <h2>
+                        {filtering
+                          ? "No people match those filters."
+                          : "Your people will appear here."}
+                      </h2>
+                      <p>
+                        {filtering
+                          ? "Try a name, circle, or something from their profile."
+                          : "Add someone to start your map."}
+                      </p>
+                      {filtering && (
+                        <button onClick={clear}>Clear filters</button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+              {view === "memories" && (
+                <div className="content-scroll list-overlay">
+                  <div className="memory-feed">
+                    {filteredMemories.map((m) => (
+                      <article className="memory-card" key={m.id}>
+                        <div className="label-row">
+                          <time>
+                            {new Date(m.createdAt).toLocaleString(undefined, {
+                              month: "long",
+                              day: "numeric",
+                              hour: "numeric",
+                              minute: "2-digit",
+                            })}
+                          </time>
+                          <button
+                            className="subtle"
+                            aria-label="Edit memory"
+                            onClick={() => {
+                              setMemoryDraft(m);
+                              showTool("memory");
+                            }}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            className="subtle"
+                            aria-label="Delete memory"
+                            disabled={busy}
+                            onClick={() =>
+                              run(
+                                () => api("memories", "DELETE", { id: m.id }),
+                                "Memory deleted. Undo is available.",
+                              )
+                            }
+                          >
+                            ×
+                          </button>
+                        </div>
+                        <p>{m.body}</p>
+                        <div className="chip-row">
+                          {m.personIds.map((id) => {
+                            const p = graph.nodes.find((p) => p.id === id);
+                            return (
+                              p && (
+                                <button
+                                  className="chip"
+                                  key={id}
+                                  onClick={() => select(id)}
+                                >
+                                  {p.name} ↗
+                                </button>
+                              )
+                            );
+                          })}
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                  {!filteredMemories.length && (
+                    <div className="empty-state">
+                      <h2>
+                        {memories.length
+                          ? "No memories match those filters."
+                          : "Save the details you’ll want later."}
+                      </h2>
+                      <p>
+                        {memories.length
+                          ? "Try words from a memory or the name of someone linked to it."
+                          : "Conversations, ideas, introductions, and things you promised."}
+                      </p>
+                      {filtering && (
+                        <button onClick={clear}>Clear filters</button>
+                      )}
+                      {!memories.length && (
+                        <button
+                          onClick={() => {
+                            setMemoryDraft(null);
+                            showTool("memory");
+                          }}
+                        >
+                          + Add a memory
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
           )}
           <button
             className="memory-shortcut"

@@ -2711,3 +2711,30 @@ small {
     font-size: 12.5px;
   }
 }
+
+/* Maps stay mounted and stacked; the list lies over whichever one is showing. */
+.space-workspace .map-wrap {
+  position: absolute;
+  inset: 0;
+  height: auto;
+}
+.space-workspace .map-wrap.map-hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+.space-workspace .content-scroll.list-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  margin: 0;
+  padding-top: 92px;
+  padding-bottom: 90px;
+  background: rgba(7, 11, 20, 0.86);
+  backdrop-filter: blur(10px);
+  animation: list-in 0.14s ease-out;
+}
+@keyframes list-in {
+  from {
+    opacity: 0;
+  }
+}

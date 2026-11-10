@@ -152,17 +152,15 @@ test("the Doing view groups by circle and dragging changes membership, not map p
   await request.patch(`/api/people/${a}`, { data: { circles: ["Party"] } });
   await page.goto("/");
   await page.getByRole("tab", { name: "What's going on" }).click();
-  await expect(page.locator(".group-label")).toHaveText([
-    /PARTY · 1/,
-    /NOTHING GOING ON YET · 1/,
-  ]);
-  await expect(page.locator(".map-stage")).toHaveAttribute(
-    "data-settling",
-    "false",
-  );
+  await expect(
+    page.locator(".map-wrap:not(.map-hidden) .group-label"),
+  ).toHaveText([/PARTY · 1/, /NOTHING GOING ON YET · 1/]);
+  await expect(
+    page.locator(".map-wrap:not(.map-hidden) .map-stage"),
+  ).toHaveAttribute("data-settling", "false");
   const center = async (name: string) => {
     const box = (await page
-      .locator(".map-person", { hasText: name })
+      .locator(".map-wrap:not(.map-hidden) .map-person", { hasText: name })
       .locator(".map-star")
       .boundingBox())!;
     return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
@@ -176,7 +174,9 @@ test("the Doing view groups by circle and dragging changes membership, not map p
   await expect
     .poll(async () => (await people(request)).find((p) => p.id === b)!.circles)
     .toEqual(["Party"]);
-  await expect(page.locator(".group-label")).toHaveText([/PARTY · 2/]);
+  await expect(
+    page.locator(".map-wrap:not(.map-hidden) .group-label"),
+  ).toHaveText([/PARTY · 2/]);
   const saved = (await (await request.get("/api/graph")).json()).nodes;
   expect(saved.find((p: { id: number }) => p.id === b)).toMatchObject({
     x: -300,
@@ -249,4 +249,36 @@ test("a line from you appears only for close people and thickens with closeness"
   expect(thick).toBeGreaterThanOrEqual(thin * 2);
   // No demo and no mode switch: the app is only ever your own people.
   await expect(page.getByText(/demo/i)).toHaveCount(0);
+});
+
+test("the list lies over the map without rebuilding it", async ({
+  page,
+  request,
+}) => {
+  const id = await create(request, { name: "Stays Put", x: 250, y: 120 });
+  await create(request, { name: "Other One", x: -250, y: -120 });
+  await page.goto("/");
+  await expect(page.locator(".map-stage")).toHaveAttribute(
+    "data-settling",
+    "false",
+  );
+  const star = page.locator(`[data-person-id="${id}"] .map-star`);
+  // Tag the live element: a rebuilt map would hand back a fresh, untagged one.
+  await star.evaluate((el) => el.setAttribute("data-same", "yes"));
+  const before = await star.boundingBox();
+  await page.getByRole("button", { name: "☰ List", exact: true }).click();
+  await expect(page.locator(".list-overlay .person-card")).toHaveCount(2);
+  await page.getByRole("button", { name: "☰ List", exact: true }).click();
+  await expect(page.locator(".list-overlay")).toHaveCount(0);
+  await expect(star).toHaveAttribute("data-same", "yes");
+  expect(await star.boundingBox()).toEqual(before);
+  await expect(page.locator(".map-stage")).toHaveAttribute(
+    "data-settling",
+    "false",
+  );
+  // Switching arrangement and back keeps it too.
+  await page.getByRole("tab", { name: "What's going on" }).click();
+  await page.getByRole("tab", { name: "Where they're from" }).click();
+  await expect(star).toHaveAttribute("data-same", "yes");
+  expect(await star.boundingBox()).toEqual(before);
 });
