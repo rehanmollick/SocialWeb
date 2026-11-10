@@ -186,6 +186,7 @@ test("personal quick add, manual labels, memory and persistence", async ({
   const graph = await (await request.get("/api/graph")).json();
   const id = graph.nodes[0].id;
   await page.locator(`[data-person-id="${id}"]`).press("Enter");
+  await page.locator(".judgment-details > summary").click();
   await page
     .getByRole("button", { name: "✦ High signal", exact: true })
     .click();
@@ -346,6 +347,7 @@ test("autosave serializes rapid edits, flushes when switching people, and retrie
   await page
     .getByLabel("About this person")
     .fill("Alpha draft kept when switching");
+  await page.locator(".judgment-details > summary").click();
   await page
     .getByRole("button", { name: "✦ High signal", exact: true })
     .click();
@@ -354,6 +356,7 @@ test("autosave serializes rapid edits, flushes when switching people, and retrie
   await page.locator(`[data-person-id="${b}"]`).press("Enter");
   await page.getByLabel("Name", { exact: true }).fill("Autosave Beta renamed");
   await page.getByLabel("About this person").fill("Beta first draft");
+  await page.locator(".judgment-details > summary").click();
   await page.getByRole("button", { name: "✓ Reliable", exact: true }).click();
   await page.getByText("Browse all circles", { exact: true }).click();
   await page
@@ -368,7 +371,8 @@ test("autosave serializes rapid edits, flushes when switching people, and retrie
     .toBe("Beta final draft");
   let g = await (await request.get("/api/graph")).json();
   expect(g.nodes.find((p: { id: number }) => p.id === a)).toMatchObject({
-    description: "Alpha draft kept when switching",
+    // Clicking into empty notes starts a bullet list.
+    description: "• Alpha draft kept when switching",
     tags: ["highsignal"],
     circles: ["UGC"],
   });

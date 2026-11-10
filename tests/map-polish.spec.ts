@@ -44,6 +44,10 @@ test.use({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
 test("desktop profile selection preserves a visible overview and exposes keyboard stars", async ({
   page,
 }) => {
+  // The app opens on personal data once any exists; this test is about the demo.
+  await page.addInitScript(() =>
+    localStorage.setItem("socialweb-mode", "demo"),
+  );
   await page.goto("/");
   const map = page.getByRole("group", { name: /^Relationship map\./ });
   await expect(map.getByRole("button")).toHaveCount(25);
@@ -141,7 +145,5 @@ test("desktop profile selection preserves a visible overview and exposes keyboar
   expect(box.x).toBeGreaterThanOrEqual(area.x + 47);
   expect(box.x + box.width).toBeLessThanOrEqual(area.x + area.width - 47 + 1);
   expect(box.y).toBeGreaterThanOrEqual(area.y + 59);
-  expect(box.y + box.height).toBeLessThanOrEqual(
-    area.y + area.height - 89 + 1,
-  );
+  expect(box.y + box.height).toBeLessThanOrEqual(area.y + area.height - 89 + 1);
 });
