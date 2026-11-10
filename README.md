@@ -16,12 +16,15 @@ Everything except the Claude features works without a key.
 
 ## How it works
 
-- **Map** groups people by how you know them (Friends, Classmates, ...). Drag
+- **Where they're from** groups people by how you know them (Friends,
+  Classmates, ...). Drag
   someone into a group to move them, into empty space to start a new group.
   People stay exactly where you drop them.
-- **Doing** groups the same people by circle: what you do together or have going
+- **What's going on** groups the same people by circle: what you do together or have going
   on ("Startups", "Halloween Afterparty"). A person shows up once per circle.
   Drag someone into a circle to add them, out of it to remove them.
+- A **line from you** to someone means you are close; it gets thicker the
+  closer you are. Set closeness in their profile.
 - **Profile** (click anyone) opens on a bullet notes box and a next step. Labels,
   closeness, group and connections sit behind folds.
 - **Brain dump** takes free text ("had coffee with Sam, he wants help with
@@ -38,21 +41,16 @@ assigns labels like high signal or closeness.
 
 ## On your phone
 
-```bash
-bun run phone
-```
+The app is deployed on Vercel with a Turso (libSQL) database, behind a passcode.
+Open the Vercel URL on any device and enter `APP_PASSCODE` from `.env.local`.
+Redeploy with `vercel deploy --prod`.
 
-This builds once, creates a passcode in `.env.local` if there is none, prints
-the address to open, and serves the app to your network. Phones start on the
-People list.
+With `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` in `.env.local`, the app on
+this computer uses the same hosted data, so every device sees the same thing.
+Remove them (or set `DB_PATH`) to work against a local `data/memory.db` instead.
 
-- Same Wi-Fi: open the printed address and enter the passcode.
-- Anywhere, or on networks that block device-to-device traffic (most campus
-  Wi-Fi): install [Tailscale](https://tailscale.com) (free) on the computer and
-  the phone and use the computer's Tailscale address with the same port.
-
-The computer has to be on and running the app. The connection on a shared Wi-Fi
-is plain HTTP, so prefer Tailscale outside your home network.
+`bun run phone` is the no-cloud alternative: it serves the app from this
+computer to your network behind the same passcode.
 
 ## Development
 
