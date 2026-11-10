@@ -10,7 +10,6 @@ export default function MemoryComposer({
   ai,
   memory,
   onCreatePerson,
-  localOnly = false,
   draft,
   onDraftChange,
   onDiscardDraft,
@@ -23,7 +22,6 @@ export default function MemoryComposer({
   onSave: (body: string, ids: number[]) => Promise<void>;
   onClose: () => void;
   ai: boolean;
-  localOnly?: boolean;
   draft?: MemoryCaptureDraft;
   onDraftChange?: (next: MemoryCaptureDraft) => void;
   onDiscardDraft?: () => void;
@@ -73,16 +71,6 @@ export default function MemoryComposer({
     setPending("finding");
     setMessage("");
     try {
-      if (localOnly) {
-        const found = people
-          .filter((p) => body.toLowerCase().includes(p.name.toLowerCase()))
-          .map((p) => p.id);
-        setIds((v) => [...new Set([...v, ...found])]);
-        setMessage(
-          `${found.length} demo people suggested. Review the selections.`,
-        );
-        return;
-      }
       const r = await fetch("/api/memories", {
         method: "POST",
         headers: { "content-type": "application/json" },

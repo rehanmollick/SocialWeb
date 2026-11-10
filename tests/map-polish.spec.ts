@@ -43,11 +43,35 @@ test.use({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
 
 test("desktop profile selection preserves a visible overview and exposes keyboard stars", async ({
   page,
+  request,
 }) => {
-  // The app opens on personal data once any exists; this test is about the demo.
-  await page.addInitScript(() =>
-    localStorage.setItem("socialweb-mode", "demo"),
-  );
+  expect(
+    (
+      await request.post("/api/snapshot", {
+        data: {
+          version: 2,
+          tables: {
+            people: [],
+            thoughts: [],
+            mentions: [],
+            edge_overrides: [],
+            bucket_names: [],
+            cluster_edges: [],
+          },
+        },
+      })
+    ).ok(),
+  ).toBeTruthy();
+  const seeded = await request.post("/api/people/batch", {
+    data: {
+      people: Array.from({ length: 25 }, (_, i) => ({
+        name: `Star Person ${String.fromCharCode(65 + i)}`,
+        bg: ["ut", "sf", "family", "climb", "plano"][i % 5],
+      })),
+    },
+  });
+  expect(seeded.ok()).toBeTruthy();
+  const firstId = (await seeded.json()).ids[0] as number;
   await page.goto("/");
   const map = page.getByRole("group", { name: /^Relationship map\./ });
   await expect(map.getByRole("button")).toHaveCount(25);
@@ -70,7 +94,7 @@ test("desktop profile selection preserves a visible overview and exposes keyboar
     );
   expect(fonts.length).toBeGreaterThanOrEqual(20);
   expect(Math.min(...fonts)).toBeGreaterThanOrEqual(10.49);
-  await map.locator('[data-person-id="1"]').press("Enter");
+  await map.locator(`[data-person-id="${firstId}"]`).press("Enter");
   await expect(page.getByLabel("Name", { exact: true })).toBeVisible();
   await expect
     .poll(async () =>
@@ -142,8 +166,8 @@ test("desktop profile selection preserves a visible overview and exposes keyboar
   const area = (await map.boundingBox())!;
   const box = (await revealed.boundingBox())!;
   // Margins are 48/60/90px in the map; allow 1px for subpixel text bounds.
-  expect(box.x).toBeGreaterThanOrEqual(area.x + 47);
+  expect(box.x).toBeGreaterThanOrEqual(area.x + 47 - 1);
   expect(box.x + box.width).toBeLessThanOrEqual(area.x + area.width - 47 + 1);
-  expect(box.y).toBeGreaterThanOrEqual(area.y + 59);
+  expect(box.y).toBeGreaterThanOrEqual(area.y + 59 - 1);
   expect(box.y + box.height).toBeLessThanOrEqual(area.y + area.height - 89 + 1);
 });

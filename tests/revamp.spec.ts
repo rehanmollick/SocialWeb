@@ -151,7 +151,7 @@ test("the Doing view groups by circle and dragging changes membership, not map p
   const b = await create(request, { name: "Loose Person", x: -300, y: 0 });
   await request.patch(`/api/people/${a}`, { data: { circles: ["Party"] } });
   await page.goto("/");
-  await page.getByRole("button", { name: "✦ Doing" }).click();
+  await page.getByRole("tab", { name: "What's going on" }).click();
   await expect(page.locator(".group-label")).toHaveText([
     /PARTY · 1/,
     /NOTHING GOING ON YET · 1/,
@@ -208,4 +208,45 @@ test("a placed person stays where they were dropped after the map settles", asyn
   expect(xs[0]).toBeLessThan(xs[1]);
   expect(xs[1]).toBeLessThan(xs[2]);
   expect(Math.abs(xs[1] - xs[0] - (xs[2] - xs[1]))).toBeLessThan(3);
+});
+
+test("a line from you appears only for close people and thickens with closeness", async ({
+  page,
+  request,
+}) => {
+  const know = await create(request, {
+    name: "Know Well",
+    strength: 5,
+    x: -300,
+    y: 200,
+  });
+  const close = await create(request, {
+    name: "Close One",
+    strength: 8,
+    x: 0,
+    y: 300,
+  });
+  const inner = await create(request, {
+    name: "Inner One",
+    strength: 10,
+    x: 300,
+    y: 200,
+  });
+  await page.goto("/");
+  await expect(page.locator(".map-stage")).toHaveAttribute(
+    "data-settling",
+    "false",
+  );
+  await expect(page.locator(`[data-bond="${know}"]`)).toHaveCount(0);
+  const width = async (id: number) =>
+    (await page.locator(`[data-bond="${id}"]`).evaluate((el) => {
+      const line = el as SVGLineElement;
+      return Number(line.getAttribute("stroke-width")) * line.getScreenCTM()!.a;
+    })) as number;
+  const thin = await width(close),
+    thick = await width(inner);
+  expect(thin).toBeGreaterThanOrEqual(2);
+  expect(thick).toBeGreaterThanOrEqual(thin * 2);
+  // No demo and no mode switch: the app is only ever your own people.
+  await expect(page.getByText(/demo/i)).toHaveCount(0);
 });

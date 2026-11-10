@@ -268,6 +268,41 @@ export default function PersonEditor({
             )}
           </div>
         </section>
+        <fieldset className="closeness-picker">
+          <legend>
+            How close{" "}
+            <span>
+              {closeness({ strength })}
+              {strength > 5 ? " · linked to you" : ""}
+            </span>
+          </legend>
+          <div>
+            {[
+              [0, "Just met"],
+              [3, "Acquaintance"],
+              [5, "Know well"],
+              [8, "Close"],
+              [10, "Inner circle"],
+            ].map(([value, label]) => (
+              <button
+                type="button"
+                key={value}
+                aria-label={String(label)}
+                title={String(label)}
+                aria-pressed={closeness({ strength }) === label}
+                onClick={() => setStrength(Number(value))}
+              >
+                <span
+                  style={{
+                    width: 8 + Number(value),
+                    height: 8 + Number(value),
+                  }}
+                />
+                {String(label)}
+              </button>
+            ))}
+          </div>
+        </fieldset>
         <section className="circle-picker">
           <h3>
             What you do together{" "}
@@ -347,10 +382,7 @@ export default function PersonEditor({
         <details className="judgment-details">
           <summary>
             Your read on them
-            <small>
-              {closeness({ strength })}
-              {tags.length ? ` · ${tags.length} labels` : ""}
-            </small>
+            <small>{tags.length ? `${tags.length} labels` : "none yet"}</small>
           </summary>
           <section className="trait-picker">
             <h3>
@@ -383,37 +415,6 @@ export default function PersonEditor({
                 ))}
             </div>
           </section>
-          <fieldset className="closeness-picker">
-            <legend>
-              Closeness <span>{closeness({ strength })}</span>
-            </legend>
-            <div>
-              {[
-                [0, "Just met"],
-                [3, "Acquaintance"],
-                [5, "Know well"],
-                [8, "Close"],
-                [10, "Inner circle"],
-              ].map(([value, label]) => (
-                <button
-                  type="button"
-                  key={value}
-                  aria-label={String(label)}
-                  title={String(label)}
-                  aria-pressed={closeness({ strength }) === label}
-                  onClick={() => setStrength(Number(value))}
-                >
-                  <span
-                    style={{
-                      width: 8 + Number(value),
-                      height: 8 + Number(value),
-                    }}
-                  />
-                  {String(label)}
-                </button>
-              ))}
-            </div>
-          </fieldset>
         </details>
         <details>
           <summary>Group & connections</summary>

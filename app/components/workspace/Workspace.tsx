@@ -9,7 +9,6 @@ import MapKey from "./MapKey";
 import CapturePanel, { type FiledItem } from "./CapturePanel";
 import TodayPanel from "./TodayPanel";
 import { nudges as findNudges } from "@/lib/graph/nudges";
-import { demoRequest, resetDemo } from "@/lib/graph/demo";
 import { closeness, closenessLevel } from "@/lib/graph/indicators";
 import {
   colorFor,
@@ -41,51 +40,16 @@ type View = "map" | "doing" | "people" | "memories";
 const SLOTS = 1000;
 const NO_CIRCLE = "circle:";
 export default function Workspace() {
-  const [mode, setMode] = useState<"demo" | "personal" | null>(null);
-  const modeRef = useRef(mode);
-  modeRef.current = mode;
   const [addPoint, setAddPoint] = useState<{
     x: number;
     y: number;
     bg: string;
   } | null>(null);
-  const api = useCallback(
-    (path: string, method = "GET", body?: any) =>
-      mode === "demo"
-        ? demoRequest(path, method, body)
-        : personalApi(path, method, body),
-    [mode],
-  );
+  const api = personalApi;
   useEffect(() => {
     // A phone is for looking someone up and jotting a note; start on the list.
     if (window.innerWidth < 700) setView("people");
-    const stored = localStorage.getItem("socialweb-mode");
-    if (stored === "personal" || stored === "demo") return setMode(stored);
-    // First visit: open your own people when there are any, else the demo.
-    let alive = true;
-    personalApi("graph")
-      .then(
-        (g: Graph) => alive && setMode(g.nodes.length ? "personal" : "demo"),
-      )
-      .catch(() => alive && setMode("demo"));
-    return () => {
-      alive = false;
-    };
   }, []);
-  function switchMode() {
-    if (busy || dirtyProfiles.size) return;
-    closeTool();
-    const next = mode === "demo" ? "personal" : "demo";
-    localStorage.setItem("socialweb-mode", next);
-    setMode(next);
-    setLoaded(false);
-    setSelected(null);
-    setEditing(false);
-    setRightOpen(false);
-    setNotice("");
-    setView("map");
-    clear();
-  }
   const [graph, setGraph] = useState<Graph>(EMPTY);
   const [memories, setMemories] = useState<Memory[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -103,8 +67,8 @@ export default function Workspace() {
   const [memoryDrafts, setMemoryDrafts] = useState<
     Record<string, MemoryCaptureDraft>
   >({});
-  const addDraftKey = `${mode}:add`;
-  const memoryDraftKey = `${mode}:memory:${memoryDraft?.id ?? "new"}`;
+  const addDraftKey = "add";
+  const memoryDraftKey = `memory:${memoryDraft?.id ?? "new"}`;
   const [query, setQuery] = useState("");
   const [lens, setLens] = useState("all");
   const [circle, setCircle] = useState("");
@@ -183,20 +147,18 @@ export default function Workspace() {
   const searchRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
   const refresh = useCallback(async () => {
-    if (!mode) return;
     const [g, m, h, s] = await Promise.all([
       api("graph"),
       api("memories"),
       api("history"),
       api("status"),
     ]);
-    if (modeRef.current !== mode) return;
     setGraph(g);
     setMemories(m.thoughts);
     setHistory(h.entries[0]?.label ?? "");
     setAi(s.ai);
     setLoaded(true);
-  }, [api, mode]);
+  }, []);
   useEffect(() => {
     void refresh().catch((e) => setError(e.message));
   }, [refresh]);
@@ -233,7 +195,7 @@ export default function Workspace() {
         try {
           await fn();
           await refresh();
-          if (modeRef.current === mode) setNotice(message);
+          setNotice(message);
         } catch (e) {
           setError(e instanceof Error ? e.message : "Something went wrong.");
           await refresh().catch(() => {});
@@ -407,19 +369,14 @@ export default function Workspace() {
           <small>your personal universe</small>
         </a>
         <div className="header-actions">
-          <div className="universe-mode">
-            <span className="mode-label">
-              {mode === "demo" ? "◌ Demo universe" : "◉ My people"}
-            </span>
-            <button
-              className="universe-switch"
-              disabled={busy || dirtyProfiles.size > 0}
-              onClick={switchMode}
-              title="Switch between fictional demo and your personal people"
-            >
-              {mode === "demo" ? "Open My people ↗" : "Try demo ↗"}
-            </button>
-          </div>
+          <button
+            className="subtle"
+            aria-pressed={view === "people"}
+            title="Everyone as a list"
+            onClick={() => setView((v) => (v === "people" ? "map" : "people"))}
+          >
+            ☰ List
+          </button>
           <button
             className="subtle"
             onClick={() => setLeftOpen((v) => !v)}
@@ -560,9 +517,9 @@ export default function Workspace() {
             <nav>
               {(
                 [
-                  ["map", "◎", "Map · how you know them"],
-                  ["doing", "✦", "Doing · what you do together"],
-                  ["people", "▦", "Everyone"],
+                  ["map", "◎", "Where they're from"],
+                  ["doing", "✦", "What's going on"],
+                  ["people", "☰", "List of everyone"],
                   ["memories", "≡", "Memories"],
                 ] as const
               ).map(([key, icon, label]) => (
@@ -677,25 +634,28 @@ export default function Workspace() {
             {rightOpen ? "›" : "‹"}
           </button>
           <div className="view-toolbar">
-            <div className="view-tabs">
+            <div
+              className="view-switch"
+              role="tablist"
+              aria-label="Arrange people by"
+            >
               <button
+                role="tab"
+                aria-selected={view === "map"}
                 className={view === "map" ? "active" : ""}
+                title="Grouped by how you know them"
                 onClick={() => setView("map")}
               >
-                ◎ Map
+                Where they're from
               </button>
               <button
+                role="tab"
+                aria-selected={view === "doing"}
                 className={view === "doing" ? "active" : ""}
                 title="Grouped by what you do together"
                 onClick={() => setView("doing")}
               >
-                ✦ Doing
-              </button>
-              <button
-                className={view === "people" ? "active" : ""}
-                onClick={() => setView("people")}
-              >
-                ▦ People
+                What's going on
               </button>
             </div>
             <div className="active-filters">
@@ -746,7 +706,7 @@ export default function Workspace() {
           ) : view === "map" ? (
             <div className="map-wrap">
               <RelationshipMap
-                key={mode}
+                key="map"
                 onCreate={(point) => {
                   setAddPoint(point);
                   setAddDrafts((previous) =>
@@ -819,7 +779,7 @@ export default function Workspace() {
           ) : view === "doing" ? (
             <div className="map-wrap">
               <RelationshipMap
-                key={`${mode}-doing`}
+                key="doing"
                 hint="Drag someone into a circle to add them · Drop outside to remove"
                 graph={doing.graph}
                 onLegend={() => showTool("legend")}
@@ -978,21 +938,16 @@ export default function Workspace() {
           <button
             className="memory-shortcut"
             onClick={() => {
-              if (mode === "personal" && ai) return showTool("dump");
+              if (ai) return showTool("dump");
               setMemoryDraft(null);
               showTool("memory");
             }}
           >
-            {mode === "personal" && ai ? "✎ Brain dump" : "+ Memory"}
+            {ai ? "✎ Brain dump" : "+ Memory"}
           </button>
           <footer className="workspace-footer">
             <span role="status">
-              {busy
-                ? "Saving…"
-                : notice ||
-                  (mode === "demo"
-                    ? "Fictional demo · Select a star to explore."
-                    : "Drag to explore your universe.")}
+              {busy ? "Saving…" : notice || "Click anyone to open their notes."}
             </span>
             <button
               disabled={!history || busy || dirtyProfiles.size > 0}
@@ -1018,13 +973,13 @@ export default function Workspace() {
           </button>
           {activeTool === "profile" && person ? (
             <PersonEditor
-              key={`${mode}-${person.id}`}
+              key={person.id}
               person={person}
               graph={graph}
               memories={memories}
               busy={busy || dirtyProfiles.size > 0}
               onSuggest={
-                mode === "personal" && ai
+                ai
                   ? () =>
                       personalApi("suggest", "POST", { personId: person.id })
                   : undefined
@@ -1068,18 +1023,8 @@ export default function Workspace() {
                 ).catch(() => {});
               }}
             />
-          ) : activeTool === "ask" && mode === "demo" ? (
-            <div className="demo-assistant">
-              <span>✧</span>
-              <h2>Ask about your universe.</h2>
-              <p>
-                The demo stays separate from your personal memories. Switch to
-                My people to ask Claude about people you actually know.
-              </p>
-              <button onClick={switchMode}>Open My people</button>
-            </div>
           ) : null}
-          {mode === "personal" && (
+          {
             <div
               className="assistant-session"
               hidden={!rightOpen || activeTool !== "ask"}
@@ -1092,12 +1037,12 @@ export default function Workspace() {
                 seed={askSeed}
               />
             </div>
-          )}
+          }
           {legend && <MapKey graph={graph} onClose={closeTool} />}
           {radar && (
             <TodayPanel
               nudges={radarItems}
-              ai={mode === "personal" && ai}
+              ai={ai}
               onSelect={select}
               onClose={closeTool}
               onAsk={(question) => {
@@ -1196,7 +1141,6 @@ export default function Workspace() {
                 });
                 closeTool();
               }}
-              localOnly={mode === "demo"}
               memory={memoryDraft}
               people={graph.nodes}
               selectedId={selected}
@@ -1246,19 +1190,6 @@ export default function Workspace() {
                     ×
                   </button>
                 </header>
-                {mode === "demo" && (
-                  <p className="demo-settings">
-                    Fictional demo · changes stay in this browser.{" "}
-                    <button
-                      onClick={() => {
-                        resetDemo();
-                        void refresh();
-                      }}
-                    >
-                      Reset demo
-                    </button>
-                  </p>
-                )}
                 <h3>Claude</h3>
                 <p>
                   {ai
@@ -1407,7 +1338,7 @@ export default function Workspace() {
                     Link
                   </button>
                 </div>
-                {mode === "personal" && (
+                {
                   <>
                     <h3>Backup & recovery</h3>
                     <p>
@@ -1452,7 +1383,7 @@ export default function Workspace() {
                       />
                     </div>
                   </>
-                )}
+                }
                 <h3>On your phone</h3>
                 <p>
                   Your data stays on this computer. Run{" "}

@@ -215,7 +215,7 @@ test("memory links remain visible through searches, can be removed, and show sav
   await expect(capture.getByLabel("Memory note")).toHaveValue("");
 });
 
-test("quick add drafts survive panel changes, stay in their universe, and clear on save or discard", async ({
+test("quick add drafts survive panel changes, and clear on save or discard", async ({
   page,
   request,
 }) => {
@@ -245,15 +245,6 @@ test("quick add drafts survive panel changes, stay in their universe, and clear 
     .getByRole("button", { name: "Close add people", exact: true })
     .click();
   await page.locator(`[data-person-id="${id}"]`).press("Enter");
-  await open();
-  await expect(names).toHaveValue("Personal Draft | keep this context");
-  await page.getByRole("button", { name: "Try demo ↗", exact: true }).click();
-  await open();
-  await expect(names).toHaveValue("");
-  await names.fill("Demo Draft");
-  await page
-    .getByRole("button", { name: "Open My people ↗", exact: true })
-    .click();
   await open();
   await expect(names).toHaveValue("Personal Draft | keep this context");
 
@@ -298,9 +289,6 @@ test("quick add drafts survive panel changes, stay in their universe, and clear 
   await expect(capture).toHaveCount(0);
   await open();
   await expect(names).toHaveValue("");
-  await page.getByRole("button", { name: "Try demo ↗", exact: true }).click();
-  await open();
-  await expect(names).toHaveValue("Demo Draft");
 });
 
 test("memory drafts preserve links, isolate new and edited memories, and retain failed saves", async ({
@@ -365,13 +353,6 @@ test("memory drafts preserve links, isolate new and edited memories, and retain 
     .click();
   await page.getByRole("button", { name: "Edit memory", exact: true }).click();
   await expect(note).toHaveValue("Saved original memory.");
-  await page.getByRole("button", { name: "Try demo ↗", exact: true }).click();
-  await open();
-  await expect(note).toHaveValue("");
-  await note.fill("Demo memory draft.");
-  await page
-    .getByRole("button", { name: "Open My people ↗", exact: true })
-    .click();
   await open();
   await expect(note).toHaveValue("New personal memory draft.");
   await expect(
@@ -411,14 +392,6 @@ test("memory drafts preserve links, isolate new and edited memories, and retain 
     .getByRole("button", { name: "Save memory", exact: true })
     .click();
   await expect(capture).toHaveCount(0);
-  await open();
-  await expect(note).toHaveValue("");
-  await page.getByRole("button", { name: "Try demo ↗", exact: true }).click();
-  await open();
-  await expect(note).toHaveValue("Demo memory draft.");
-  await capture
-    .getByRole("button", { name: "Discard draft", exact: true })
-    .click();
   await open();
   await expect(note).toHaveValue("");
 });

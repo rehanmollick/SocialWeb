@@ -105,70 +105,6 @@ test("new group creation is atomic, malformed backups cannot corrupt numeric fie
   expect(await (await request.get("/api/snapshot")).json()).toEqual(saved);
 });
 
-test("demo fills the viewport, edits are isolated, bulk add and undo", async ({
-  page,
-  request,
-}) => {
-  const errors: string[] = [];
-  page.on("pageerror", (e) => errors.push(e.message));
-  const before = await (await request.get("/api/snapshot")).json();
-  await page.goto("/");
-  await expect(page.locator(".map-person")).toHaveCount(25);
-  await expect(page.locator(".navigation")).toBeHidden();
-  await expect(page.locator(".right-panel")).toBeHidden();
-  expect(
-    (await page.locator(".map-wrap").boundingBox())!.height,
-  ).toBeGreaterThan(900);
-  await expect(page.getByText("Follow-ups", { exact: true })).toHaveCount(0);
-  await page.getByRole("button", { name: "+ Add people", exact: true }).click();
-  await page
-    .getByLabel("Names to add")
-    .fill("Test Nova | shoots UGC videos\nTest Orion");
-  await page.getByRole("button", { name: "Add 2 people", exact: true }).click();
-  await expect(page.locator(".map-person")).toHaveCount(27);
-  await page.getByRole("button", { name: "↶ Undo", exact: true }).click();
-  await expect(page.locator(".map-person")).toHaveCount(25);
-  await page.locator('[data-person-id="1"]').press("Enter");
-  await page.getByLabel("About this person").fill("Helps with UGC videos.");
-  await expect(
-    page.getByRole("button", { name: "+ ◉ UGC", exact: true }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "+ ◉ UGC", exact: true }).click();
-  await expect(page.locator(".autosave-status")).toHaveText(
-    "All changes saved",
-  );
-  await expect(page.locator(".right-panel")).toBeVisible();
-  await page
-    .getByRole("button", { name: "Close person details", exact: true })
-    .click();
-  await expect(page.locator(".right-panel")).toBeHidden();
-  expect(await (await request.get("/api/snapshot")).json()).toEqual(before);
-  await page.reload();
-  await expect(page.locator('[data-person-id="1"]')).toHaveAttribute(
-    "aria-label",
-    /UGC/,
-  );
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.getByRole("button", { name: "Fit map", exact: true }).click();
-  await page.screenshot({ path: "artifacts/universe-desktop.png" });
-  await page.setViewportSize({ width: 1280, height: 800 });
-  await page.getByRole("button", { name: "Fit map", exact: true }).click();
-  await page.screenshot({ path: "artifacts/universe-laptop.png" });
-  await page.locator('[data-person-id="1"]').press("Enter");
-  await expect
-    .poll(async () =>
-      Math.round((await page.locator(".right-panel").boundingBox())!.width),
-    )
-    .toBe(370);
-  await page.screenshot({ path: "artifacts/compact-profile.png" });
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth > innerWidth,
-    ),
-  ).toBe(false);
-  expect(errors).toEqual([]);
-});
-
 test("personal quick add, manual labels, memory and persistence", async ({
   page,
   request,
@@ -235,7 +171,25 @@ test("personal quick add, manual labels, memory and persistence", async ({
 
 test("docked tools resize the map, the key explains all circles, and zoom is directly controllable", async ({
   page,
+  request,
 }) => {
+  const id = await create(request, {
+    name: "Dock Person",
+    strength: 10,
+    circles: ["Content", "Close friends"],
+  });
+  expect(
+    (
+      await request.post("/api/people/batch", {
+        data: {
+          people: Array.from({ length: 24 }, (_, i) => ({
+            name: `Dock Extra ${String.fromCharCode(65 + i)}`,
+            bg: ["ut", "sf", "family", "climb"][i % 4],
+          })),
+        },
+      })
+    ).ok(),
+  ).toBeTruthy();
   await page.goto("/");
   await expect(page.locator(".map-person")).toHaveCount(25);
   const map = page.locator(".map-wrap");
@@ -246,7 +200,7 @@ test("docked tools resize the map, the key explains all circles, and zoom is dir
   await expect
     .poll(async () => Math.round((await map.boundingBox())!.width))
     .toBe(full - 260);
-  await page.locator('[data-person-id="1"]').press("Enter");
+  await page.locator(`[data-person-id="${id}"]`).press("Enter");
   await expect
     .poll(async () => Math.round((await map.boundingBox())!.width))
     .toBe(full - 260 - 370);
@@ -262,11 +216,11 @@ test("docked tools resize the map, the key explains all circles, and zoom is dir
     .getByRole("button", { name: "Circle: Startups", exact: true })
     .click();
   await expect(
-    page.locator('[data-person-id="1"] .map-category-segment'),
+    page.locator(`[data-person-id="${id}"] .map-category-segment`),
   ).toHaveCount(4);
-  await expect(page.locator('[data-person-id="1"] .map-closeness')).toHaveText(
-    /5/,
-  );
+  await expect(
+    page.locator(`[data-person-id="${id}"] .map-closeness`),
+  ).toHaveText(/5/);
   await expect(
     page.getByRole("button", { name: "Save", exact: true }),
   ).toHaveCount(0);
@@ -845,7 +799,7 @@ test("Explore finds people immediately, opens by keyboard, and clears no matches
     .click();
   await expect(page.getByLabel("Search people")).toHaveValue("");
   await expect(results).toHaveCount(0);
-  await page.getByRole("button", { name: "▦ People", exact: true }).click();
+  await page.getByRole("button", { name: "☰ List", exact: true }).click();
   await expect(
     page.locator(".person-card").filter({ hasText: "Mira Vale" }),
   ).toContainText("Close (4/5)");
@@ -1022,15 +976,6 @@ test("Ask retains conversation and draft while following a person reference", as
     "Quinn Sol can help",
   );
   await expect(page.locator(".context-pill")).toContainText("Quinn Sol");
-  await page.getByRole("button", { name: "Try demo ↗", exact: true }).click();
-  await expect(page.locator(".map-person")).toHaveCount(25);
-  await page
-    .getByRole("button", { name: "Open My people ↗", exact: true })
-    .click();
-  await expect(page.locator(`[data-person-id="${id}"]`)).toBeVisible();
-  await page.getByRole("button", { name: "✧ Ask", exact: true }).click();
-  await expect(page.locator(".chat-message")).toHaveCount(0);
-  await expect(page.getByLabel("Ask your memory")).toHaveValue("");
 });
 
 test("Offline Ask never calls the provider from keyboard Enter", async ({

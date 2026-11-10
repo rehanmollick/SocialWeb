@@ -2682,3 +2682,32 @@ small {
   color: #e7a3a3;
   margin: 0;
 }
+
+/* The one main control: how the people are arranged */
+.view-switch {
+  display: inline-flex;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(16, 21, 30, 0.82);
+  backdrop-filter: blur(8px);
+}
+.view-switch button {
+  border: 0;
+  border-radius: 999px;
+  padding: 8px 18px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--muted);
+  background: transparent;
+}
+.view-switch button.active {
+  color: #0d121b;
+  background: var(--accent);
+}
+@media (max-width: 700px) {
+  .view-switch button {
+    padding: 7px 12px;
+    font-size: 12.5px;
+  }
+}

@@ -55,6 +55,13 @@ type Props = {
   // Replaces the default drag hint, for views where dropping means something else.
   hint?: string;
 };
+// Screen-pixel width of the line from you to someone: none until they are
+// closer than "know well", then from a hairline up to an unmistakable band.
+export function bondWidth(p: Pick<Person, "strength" | "pinToMe">) {
+  if (p.strength <= 5) return p.pinToMe && p.strength > 0 ? 1 : 0;
+  const t = Math.min(1, (p.strength - 5) / 5);
+  return 1 + t * t * 6;
+}
 type Node = SimulationNodeDatum & {
   id: number;
   tx: number;
@@ -644,19 +651,6 @@ export default function RelationshipMap({
                 strokeDasharray={hover === g.bg ? "6 4" : "2 8"}
                 onPointerDown={(e) => start(e, "group", undefined, g.bg)}
               />
-              {graph.nodes.some(
-                (n) => n.bg === g.bg && n.strength > 0 && !n.pinToMe,
-              ) && (
-                <line
-                  x1="0"
-                  y1="0"
-                  x2={g.x}
-                  y2={g.y}
-                  stroke="currentColor"
-                  strokeOpacity=".14"
-                  strokeDasharray="4 7"
-                />
-              )}
               <text
                 x={g.x}
                 y={g.y - g.r - 12}
@@ -715,20 +709,31 @@ export default function RelationshipMap({
               />
             );
           })}
+          {/* A line to you means you are close; it thickens with closeness. */}
           {graph.nodes
-            .filter((n) => n.pinToMe && n.strength > 0)
+            .filter((n) => bondWidth(n) > 0)
             .map((n) => {
               const p = positions.current.get(n.id);
               return p ? (
                 <line
                   key={`me-${n.id}`}
+                  className="map-bond"
+                  data-bond={n.id}
                   x1={0}
                   y1={0}
                   x2={p.x}
                   y2={p.y}
                   stroke={colorFor(n.bg)}
-                  strokeWidth={0.6 + n.strength * 0.15}
-                  strokeOpacity={filtering && !matches.has(n.id) ? 0.05 : 0.4}
+                  strokeLinecap="round"
+                  strokeWidth={bondWidth(n) / camera.k}
+                  strokeOpacity={
+                    filtering && !matches.has(n.id)
+                      ? 0.06
+                      : n.id === selected
+                        ? 0.85
+                        : 0.42
+                  }
+                  pointerEvents="none"
                 />
               ) : null;
             })}
@@ -992,7 +997,7 @@ export default function RelationshipMap({
       </svg>
       <div className="map-legend">
         <button onClick={onLegend}>ⓘ Map key</button>
-        <span>Color = group · ring = circles · 1–5 = closeness</span>
+        <span>Color = group · ring = circles · line to you = how close</span>
       </div>
       <div className="map-controls">
         <button onClick={() => setLabels((v) => !v)} aria-pressed={labels}>
