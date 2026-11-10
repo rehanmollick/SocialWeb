@@ -8,7 +8,11 @@ import * as schema from "./schema";
 
 // One code path for both homes of the data: a SQLite file on this computer, or
 // a hosted libSQL (Turso) database when TURSO_DATABASE_URL is set.
-const remote = process.env.TURSO_DATABASE_URL?.trim();
+// An explicit DB_PATH always wins, so tests and experiments that name a file can
+// never touch the hosted data.
+const remote = process.env.DB_PATH
+  ? undefined
+  : process.env.TURSO_DATABASE_URL?.trim();
 const DB_PATH = process.env.DB_PATH || "data/memory.db";
 if (!remote && !existsSync(dirname(DB_PATH)))
   mkdirSync(dirname(DB_PATH), { recursive: true });
