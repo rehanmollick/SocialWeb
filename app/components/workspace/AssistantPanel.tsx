@@ -11,7 +11,10 @@ export default function AssistantPanel({
   selectedId,
   onSelect,
   ai,
+  seed,
 }: {
+  // A question handed in from elsewhere; a new token asks it once.
+  seed?: { token: number; question: string };
   people: Person[];
   selectedId: number | null;
   onSelect: (id: number) => void;
@@ -27,10 +30,16 @@ export default function AssistantPanel({
       behavior: "smooth",
     });
   }, [messages, busy]);
-  async function ask() {
-    const question = input.trim();
+  const asked = useRef(0);
+  useEffect(() => {
+    if (!seed || seed.token === asked.current) return;
+    asked.current = seed.token;
+    void ask(seed.question);
+  }, [seed]);
+  async function ask(preset?: string) {
+    const question = (preset ?? input).trim();
     if (!question || busy || !ai) return;
-    setInput("");
+    if (!preset) setInput("");
     setBusy(true);
     const history = [...messages, { role: "user" as const, content: question }];
     setMessages(history);
@@ -89,9 +98,9 @@ export default function AssistantPanel({
             </p>
             <div className="prompt-list">
               {[
-                "Who could help me with UGC or content?",
-                "Which high-agency people could I build with?",
                 "Who should I reconnect with?",
+                "Who could help with what I'm working on?",
+                "What have I been meaning to do with people?",
               ].map((q) => (
                 <button key={q} onClick={() => setInput(q)}>
                   {q}

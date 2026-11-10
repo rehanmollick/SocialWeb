@@ -1,12 +1,14 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useProfileAutosave } from "./useProfileAutosave";
 import {
   groupName,
   type Person,
   type Graph,
   type Memory,
+  today,
 } from "@/lib/graph/types";
+import { ago } from "@/lib/graph/nudges";
 import {
   circleIcon,
   circleColor,
@@ -26,6 +28,8 @@ type Props = {
   onConnect: (id: number, weight: number, remove?: boolean) => Promise<void>;
   onSelect: (id: number) => void;
   onPendingChange: (pending: boolean) => void;
+  // Asks Claude what the saved notes imply. Absent when AI is unavailable.
+  onSuggest?: () => Promise<{ circles: string[]; nextStep: string }>;
 };
 export default function PersonEditor({
   person,
@@ -38,6 +42,7 @@ export default function PersonEditor({
   onConnect,
   onSelect,
   onPendingChange,
+  onSuggest,
 }: Props) {
   const [name, setName] = useState(person?.name ?? "");
   const [description, setDescription] = useState(person?.description ?? "");
@@ -48,11 +53,68 @@ export default function PersonEditor({
   const [circle, setCircle] = useState("");
   const [connect, setConnect] = useState("");
   const [newGroup, setNewGroup] = useState("");
+  const [nextStep, setNextStep] = useState(person?.nextStep ?? "");
+  const [lastContact, setLastContact] = useState(person?.lastContact ?? "");
+  const [aiIdeas, setAiIdeas] = useState<{
+    circles: string[];
+    nextStep: string;
+  }>({ circles: [], nextStep: "" });
+  const [thinking, setThinking] = useState(false);
+  // A lone bullet is the editor's starting cursor, not a note.
+  const notes = description.trim() === "•" ? "" : description;
   const { status, retry } = useProfileAutosave(
-    { name, description, tags, circles, strength, bg },
+    {
+      name,
+      description: notes,
+      tags,
+      circles,
+      strength,
+      bg,
+      nextStep,
+      lastContact,
+    },
     onSave,
     onPendingChange,
   );
+  const edited = useRef(false),
+    askedFor = useRef(person?.description ?? ""),
+    suggest = useRef(onSuggest);
+  suggest.current = onSuggest;
+  // Once an edit has saved and typing has paused, ask for suggestions. They are
+  // only ever offered as chips; nothing is applied without a tap.
+  useEffect(() => {
+    if (
+      !suggest.current ||
+      !edited.current ||
+      status !== "All changes saved" ||
+      notes.trim().length < 12 ||
+      notes === askedFor.current
+    )
+      return;
+    let stale = false;
+    const timer = setTimeout(() => {
+      askedFor.current = notes;
+      setThinking(true);
+      suggest
+        .current?.()
+        .then((ideas) => {
+          if (!stale) setAiIdeas(ideas);
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (!stale) setThinking(false);
+        });
+    }, 1400);
+    return () => {
+      stale = true;
+      clearTimeout(timer);
+    };
+  }, [notes, status]);
+  function editNotes(value: string) {
+    edited.current = true;
+    setDescription(value);
+    setLastContact(today());
+  }
   const toggleCircle = (c: string) =>
     setCircles((v) => (v.includes(c) ? v.filter((x) => x !== c) : [...v, c]));
   const presets = new Set(CIRCLE_SECTIONS.flatMap((s) => s.circles));
@@ -69,7 +131,14 @@ export default function PersonEditor({
       setCircles((v) => [...v, c]);
     setCircle("");
   };
-  const suggestions = suggestedCircles(description, circles);
+  const suggestions = [
+    ...new Set([
+      ...aiIdeas.circles.filter(
+        (c) => !circles.some((v) => v.toLowerCase() === c.toLowerCase()),
+      ),
+      ...suggestedCircles(description, circles),
+    ]),
+  ];
   const circleChoice = (c: string) => (
     <button
       type="button"
@@ -111,11 +180,38 @@ export default function PersonEditor({
           maxLength={500}
         />
         <textarea
+          className="profile-notes"
           aria-label="About this person"
-          placeholder="What do you want to remember about them?"
+          placeholder={
+            "• who they are to you\n• why you like them\n• what you want to do with them"
+          }
           value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          rows={3}
+          onChange={(e) => editNotes(e.target.value)}
+          onFocus={() => {
+            if (!description) setDescription("• ");
+          }}
+          onBlur={() => {
+            if (description.trim() === "•") setDescription("");
+          }}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing)
+              return;
+            const el = e.currentTarget,
+              at = el.selectionStart;
+            const line = description.slice(
+              description.lastIndexOf("\n", at - 1) + 1,
+              at,
+            );
+            if (!line.startsWith("• ")) return;
+            e.preventDefault();
+            // Edit the DOM value in place so the caret never jumps while the
+            // controlled state catches up. Enter on an empty bullet ends the list.
+            if (line.trim() === "•")
+              el.setRangeText("", at - line.length, el.selectionEnd, "end");
+            else el.setRangeText("\n• ", at, el.selectionEnd, "end");
+            editNotes(el.value);
+          }}
+          rows={7}
         />
         <div className="autosave-status" role="status">
           {status}
@@ -125,71 +221,56 @@ export default function PersonEditor({
             </button>
           )}
         </div>
-        <section className="trait-picker">
-          <h3>
-            Your judgment <small>Only you assign these</small>
-          </h3>
-          <div className="chip-row">
-            {JUDGMENTS.map(([tag, icon, label]) => (
+        <section className="next-step">
+          <label>
+            <span>Next with them</span>
+            <input
+              aria-label="Next step"
+              placeholder="e.g. grab lunch, ask for an intro"
+              value={nextStep}
+              maxLength={120}
+              onChange={(e) => setNextStep(e.target.value)}
+            />
+          </label>
+          {aiIdeas.nextStep && !nextStep.trim() && (
+            <button
+              type="button"
+              className="chip ai-chip"
+              onClick={() => {
+                setNextStep(aiIdeas.nextStep);
+                setAiIdeas((v) => ({ ...v, nextStep: "" }));
+              }}
+            >
+              ✧ {aiIdeas.nextStep} · tap to set
+            </button>
+          )}
+          <div className="last-touched">
+            <small>
+              Last touched {ago(lastContact)}
+              {thinking ? " · ✧ reading your notes…" : ""}
+            </small>
+            {nextStep.trim() ? (
               <button
                 type="button"
-                key={tag}
-                aria-pressed={tags.includes(tag)}
-                className={`trait-chip ${tags.includes(tag) ? "selected" : ""}`}
-                onClick={() => toggle(tag)}
+                onClick={() => {
+                  setNextStep("");
+                  setLastContact(today());
+                }}
               >
-                {icon} {label}
+                ✓ Done
               </button>
-            ))}
-            {tags
-              .filter((t) => !JUDGMENTS.some(([key]) => key === t))
-              .map((t) => (
-                <button
-                  type="button"
-                  className="trait-chip selected"
-                  key={t}
-                  aria-pressed="true"
-                  onClick={() => toggle(t)}
-                >
-                  {t} ×
+            ) : (
+              lastContact !== today() && (
+                <button type="button" onClick={() => setLastContact(today())}>
+                  Saw them today
                 </button>
-              ))}
+              )
+            )}
           </div>
         </section>
-        <fieldset className="closeness-picker">
-          <legend>
-            Closeness <span>{closeness({ strength })}</span>
-          </legend>
-          <div>
-            {[
-              [0, "Just met"],
-              [3, "Acquaintance"],
-              [5, "Know well"],
-              [8, "Close"],
-              [10, "Inner circle"],
-            ].map(([value, label]) => (
-              <button
-                type="button"
-                key={value}
-                aria-label={String(label)}
-                title={String(label)}
-                aria-pressed={closeness({ strength }) === label}
-                onClick={() => setStrength(Number(value))}
-              >
-                <span
-                  style={{
-                    width: 8 + Number(value),
-                    height: 8 + Number(value),
-                  }}
-                />
-                {String(label)}
-              </button>
-            ))}
-          </div>
-        </fieldset>
         <section className="circle-picker">
           <h3>
-            Circles & areas{" "}
+            What you do together{" "}
             <small>
               {circles.length
                 ? `${circles.length} selected · tap to remove`
@@ -207,7 +288,7 @@ export default function PersonEditor({
           )}
           {!!suggestions.length && (
             <div className="suggested-circles">
-              <small>From your note · tap to add</small>
+              <small>Suggested from your notes · tap to add</small>
               <div className="chip-row">
                 {suggestions.map((c) => (
                   <button
@@ -263,6 +344,77 @@ export default function PersonEditor({
             </button>
           </div>
         </section>
+        <details className="judgment-details">
+          <summary>
+            Your read on them
+            <small>
+              {closeness({ strength })}
+              {tags.length ? ` · ${tags.length} labels` : ""}
+            </small>
+          </summary>
+          <section className="trait-picker">
+            <h3>
+              Your judgment <small>Only you assign these</small>
+            </h3>
+            <div className="chip-row">
+              {JUDGMENTS.map(([tag, icon, label]) => (
+                <button
+                  type="button"
+                  key={tag}
+                  aria-pressed={tags.includes(tag)}
+                  className={`trait-chip ${tags.includes(tag) ? "selected" : ""}`}
+                  onClick={() => toggle(tag)}
+                >
+                  {icon} {label}
+                </button>
+              ))}
+              {tags
+                .filter((t) => !JUDGMENTS.some(([key]) => key === t))
+                .map((t) => (
+                  <button
+                    type="button"
+                    className="trait-chip selected"
+                    key={t}
+                    aria-pressed="true"
+                    onClick={() => toggle(t)}
+                  >
+                    {t} ×
+                  </button>
+                ))}
+            </div>
+          </section>
+          <fieldset className="closeness-picker">
+            <legend>
+              Closeness <span>{closeness({ strength })}</span>
+            </legend>
+            <div>
+              {[
+                [0, "Just met"],
+                [3, "Acquaintance"],
+                [5, "Know well"],
+                [8, "Close"],
+                [10, "Inner circle"],
+              ].map(([value, label]) => (
+                <button
+                  type="button"
+                  key={value}
+                  aria-label={String(label)}
+                  title={String(label)}
+                  aria-pressed={closeness({ strength }) === label}
+                  onClick={() => setStrength(Number(value))}
+                >
+                  <span
+                    style={{
+                      width: 8 + Number(value),
+                      height: 8 + Number(value),
+                    }}
+                  />
+                  {String(label)}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+        </details>
         <details>
           <summary>Group & connections</summary>
           <label>

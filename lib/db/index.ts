@@ -96,6 +96,5 @@ sqlite
   })
   .immediate();
 
-
 export const db = drizzle(sqlite, { schema });
 export { schema };

@@ -6,6 +6,9 @@ import AssistantPanel from "./AssistantPanel";
 import MemoryComposer, { type MemoryCaptureDraft } from "./MemoryComposer";
 import QuickAdd, { type QuickAddDraft } from "./QuickAdd";
 import MapKey from "./MapKey";
+import CapturePanel, { type FiledItem } from "./CapturePanel";
+import TodayPanel from "./TodayPanel";
+import { nudges as findNudges } from "@/lib/graph/nudges";
 import { demoRequest, resetDemo } from "@/lib/graph/demo";
 import { closeness, closenessLevel } from "@/lib/graph/indicators";
 import {
@@ -32,7 +35,11 @@ async function personalApi(path: string, method = "GET", body?: unknown) {
   if (!r.ok) throw new Error(data.error || `Request failed (${r.status})`);
   return data;
 }
-type View = "map" | "people" | "memories";
+type View = "map" | "doing" | "people" | "memories";
+// In the Doing view each person appears once per circle. A virtual node's id
+// packs the person and the circle so drags can be mapped back.
+const SLOTS = 1000;
+const NO_CIRCLE = "circle:";
 export default function Workspace() {
   const [mode, setMode] = useState<"demo" | "personal" | null>(null);
   const modeRef = useRef(mode);
@@ -50,11 +57,18 @@ export default function Workspace() {
     [mode],
   );
   useEffect(() => {
-    setMode(
-      localStorage.getItem("socialweb-mode") === "personal"
-        ? "personal"
-        : "demo",
-    );
+    const stored = localStorage.getItem("socialweb-mode");
+    if (stored === "personal" || stored === "demo") return setMode(stored);
+    // First visit: open your own people when there are any, else the demo.
+    let alive = true;
+    personalApi("graph")
+      .then(
+        (g: Graph) => alive && setMode(g.nodes.length ? "personal" : "demo"),
+      )
+      .catch(() => alive && setMode("demo"));
+    return () => {
+      alive = false;
+    };
   }, []);
   function switchMode() {
     if (busy || dirtyProfiles.size) return;
@@ -103,9 +117,24 @@ export default function Workspace() {
   const [settings, setSettings] = useState(false);
   const [help, setHelp] = useState(false);
   const [legend, setLegend] = useState(false);
+  const [dumping, setDumping] = useState(false);
+  const [radar, setRadar] = useState(false);
+  const [dumpText, setDumpText] = useState("");
+  const [askSeed, setAskSeed] = useState<{ token: number; question: string }>();
   function showTool(
-    tool: "add" | "memory" | "settings" | "help" | "legend" | "profile" | "ask",
+    tool:
+      | "add"
+      | "memory"
+      | "settings"
+      | "help"
+      | "legend"
+      | "profile"
+      | "ask"
+      | "dump"
+      | "radar",
   ) {
+    setDumping(tool === "dump");
+    setRadar(tool === "radar");
     setAdding(tool === "add");
     setCapturing(tool === "memory");
     setSettings(tool === "settings");
@@ -115,6 +144,8 @@ export default function Workspace() {
     setRightOpen(true);
   }
   function closeTool() {
+    setDumping(false);
+    setRadar(false);
     setAdding(false);
     setCapturing(false);
     setSettings(false);
@@ -123,19 +154,23 @@ export default function Workspace() {
     setEditing(false);
     setRightOpen(false);
   }
-  const activeTool = adding
-    ? "add"
-    : capturing
-      ? "memory"
-      : settings
-        ? "settings"
-        : help
-          ? "help"
-          : legend
-            ? "legend"
-            : editing
-              ? "profile"
-              : "ask";
+  const activeTool = dumping
+    ? "dump"
+    : radar
+      ? "radar"
+      : adding
+        ? "add"
+        : capturing
+          ? "memory"
+          : settings
+            ? "settings"
+            : help
+              ? "help"
+              : legend
+                ? "legend"
+                : editing
+                  ? "profile"
+                  : "ask";
   const toolRef = useRef({ activeTool, memoryDraftKey });
   toolRef.current = { activeTool, memoryDraftKey };
   const [linkA, setLinkA] = useState("");
@@ -171,6 +206,8 @@ export default function Workspace() {
         setTimeout(() => searchRef.current?.focus(), 0);
       }
       if (e.key === "Escape") {
+        setDumping(false);
+        setRadar(false);
         setCapturing(false);
         setEditing(false);
         setAdding(false);
@@ -285,6 +322,43 @@ export default function Workspace() {
     [memories, graph.nodes, query, lens, circle, group],
   );
   const person = graph.nodes.find((p) => p.id === selected) ?? null;
+  const radarItems = useMemo(() => findNudges(graph.nodes), [graph.nodes]);
+  const doing = useMemo(() => {
+    const names = [...new Set(graph.nodes.flatMap((p) => p.circles))].sort();
+    const key = (p: Person, c: string) =>
+      p.id * SLOTS + (c ? names.indexOf(c) + 1 : 0);
+    return {
+      names,
+      key,
+      graph: {
+        nodes: graph.nodes.flatMap((p) =>
+          (p.circles.length ? p.circles : [""]).map((c) => ({
+            ...p,
+            id: key(p, c),
+            bg: `${NO_CIRCLE}${c}`,
+            x: null,
+            y: null,
+            pinToMe: false,
+          })),
+        ),
+        edges: [],
+        clusterEdges: [],
+        bucketNames: {
+          [NO_CIRCLE]: "Nothing going on yet",
+          ...Object.fromEntries(names.map((c) => [`${NO_CIRCLE}${c}`, c])),
+        },
+      } satisfies Graph,
+    };
+  }, [graph.nodes]);
+  const doingMatches = useMemo(
+    () =>
+      new Set(
+        doing.graph.nodes
+          .filter((n) => matches.has(Math.floor(n.id / SLOTS)))
+          .map((n) => n.id),
+      ),
+    [doing, matches],
+  );
   const filtering = !!(query.trim() || lens !== "all" || circle || group);
   function clear() {
     setQuery("");
@@ -361,6 +435,16 @@ export default function Workspace() {
             ✧ Ask
           </button>
           <button
+            className="subtle radar-button"
+            onClick={() => {
+              if (rightOpen && activeTool === "radar") closeTool();
+              else showTool("radar");
+            }}
+          >
+            ◔ Radar
+            {radarItems.length > 0 && <b>{radarItems.length}</b>}
+          </button>
+          <button
             className="subtle"
             onClick={() => showTool("help")}
             aria-label="How to use SocialWeb"
@@ -383,7 +467,7 @@ export default function Workspace() {
         </div>
       </header>
       <div
-        className={`workspace-grid ${leftOpen ? "" : "left-closed"} ${rightOpen || adding || capturing || settings || help || legend ? "" : "right-closed"}`}
+        className={`workspace-grid ${leftOpen ? "" : "left-closed"} ${rightOpen || adding || capturing || settings || help || legend || dumping || radar ? "" : "right-closed"}`}
       >
         <aside className="navigation">
           <div className="navigation-inner">
@@ -474,7 +558,8 @@ export default function Workspace() {
             <nav>
               {(
                 [
-                  ["map", "◎", "Relationship map"],
+                  ["map", "◎", "Map · how you know them"],
+                  ["doing", "✦", "Doing · what you do together"],
                   ["people", "▦", "Everyone"],
                   ["memories", "≡", "Memories"],
                 ] as const
@@ -596,6 +681,13 @@ export default function Workspace() {
                 onClick={() => setView("map")}
               >
                 ◎ Map
+              </button>
+              <button
+                className={view === "doing" ? "active" : ""}
+                title="Grouped by what you do together"
+                onClick={() => setView("doing")}
+              >
+                ✦ Doing
               </button>
               <button
                 className={view === "people" ? "active" : ""}
@@ -722,6 +814,61 @@ export default function Workspace() {
                 </div>
               )}
             </div>
+          ) : view === "doing" ? (
+            <div className="map-wrap">
+              <RelationshipMap
+                key={`${mode}-doing`}
+                hint="Drag someone into a circle to add them · Drop outside to remove"
+                graph={doing.graph}
+                onLegend={() => showTool("legend")}
+                selected={
+                  person ? doing.key(person, person.circles[0] ?? "") : null
+                }
+                matches={doingMatches}
+                filtering={filtering}
+                onSelect={(id) => select(Math.floor(id / SLOTS))}
+                focus={focus}
+                onGroup={(bg) => {
+                  const name = bg.slice(NO_CIRCLE.length);
+                  setCircle(name);
+                  setNotice(
+                    name
+                      ? `Showing everyone in ${name}.`
+                      : "People with nothing going on yet. Drag one into a circle.",
+                  );
+                }}
+                onMove={async (id, _x, _y, bg) => {
+                  const who = graph.nodes.find(
+                    (p) => p.id === Math.floor(id / SLOTS),
+                  );
+                  if (!who) return;
+                  const from = doing.names[(id % SLOTS) - 1] ?? "";
+                  const to = bg.startsWith(NO_CIRCLE)
+                    ? bg.slice(NO_CIRCLE.length)
+                    : "";
+                  if (to === from && bg.startsWith(NO_CIRCLE)) return;
+                  const circles = who.circles.filter((c) => c !== from);
+                  if (to && !circles.includes(to)) circles.push(to);
+                  await action(
+                    () => api(`people/${who.id}`, "PATCH", { circles }),
+                    to
+                      ? `${who.name} is now in ${to}.`
+                      : `${who.name} left ${from || "the circle"}.`,
+                  ).catch(() => {});
+                }}
+                onArrange={async () => {}}
+              />
+              {!doing.names.length && (
+                <div className="map-empty doing-empty">
+                  <span>✦</span>
+                  <h2>Nothing going on yet.</h2>
+                  <p>
+                    Open someone and write a line about what you do together, or
+                    use Brain dump. Circles appear here as you add them.
+                  </p>
+                </div>
+              )}
+            </div>
           ) : view === "people" ? (
             <div className="content-scroll">
               <div className="people-grid">{filtered.map(card)}</div>
@@ -829,11 +976,12 @@ export default function Workspace() {
           <button
             className="memory-shortcut"
             onClick={() => {
+              if (mode === "personal" && ai) return showTool("dump");
               setMemoryDraft(null);
               showTool("memory");
             }}
           >
-            + Memory
+            {mode === "personal" && ai ? "✎ Brain dump" : "+ Memory"}
           </button>
           <footer className="workspace-footer">
             <span role="status">
@@ -873,6 +1021,12 @@ export default function Workspace() {
               graph={graph}
               memories={memories}
               busy={busy || dirtyProfiles.size > 0}
+              onSuggest={
+                mode === "personal" && ai
+                  ? () =>
+                      personalApi("suggest", "POST", { personId: person.id })
+                  : undefined
+              }
               onPendingChange={(pending) =>
                 setDirtyProfiles((previous) => {
                   const next = new Set(previous);
@@ -933,10 +1087,46 @@ export default function Workspace() {
                 selectedId={selected}
                 onSelect={select}
                 ai={ai}
+                seed={askSeed}
               />
             </div>
           )}
           {legend && <MapKey graph={graph} onClose={closeTool} />}
+          {radar && (
+            <TodayPanel
+              nudges={radarItems}
+              ai={mode === "personal" && ai}
+              onSelect={select}
+              onClose={closeTool}
+              onAsk={(question) => {
+                setAskSeed({ token: Date.now(), question });
+                showTool("ask");
+              }}
+            />
+          )}
+          {dumping && (
+            <CapturePanel
+              text={dumpText}
+              onTextChange={setDumpText}
+              onClose={closeTool}
+              onPreview={async (text) =>
+                (
+                  (await personalApi("capture", "POST", {
+                    text,
+                    preview: true,
+                  })) as { people: FiledItem[] }
+                ).people
+              }
+              onApply={async (text, items) => {
+                await action(
+                  () => personalApi("capture", "POST", { text, items }),
+                  `Filed onto ${items.length} ${items.length === 1 ? "profile" : "profiles"}. Undo reverses it.`,
+                );
+                setDumpText("");
+                closeTool();
+              }}
+            />
+          )}
           {adding && (
             <QuickAdd
               key={addDraftKey}

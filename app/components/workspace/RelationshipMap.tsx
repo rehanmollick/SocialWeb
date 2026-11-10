@@ -34,7 +34,7 @@ import SpaceBackdrop from "./SpaceBackdrop";
 import { placeNames } from "@/lib/graph/labels";
 type Props = {
   onLegend: () => void;
-  onCreate: (point: Point & { bg: string }) => void;
+  onCreate?: (point: Point & { bg: string }) => void;
   graph: Graph;
   selected: number | null;
   matches: Set<number>;
@@ -52,6 +52,8 @@ type Props = {
     positions: { id: number; x: number; y: number }[],
   ) => Promise<void>;
   focus: number;
+  // Replaces the default drag hint, for views where dropping means something else.
+  hint?: string;
 };
 type Node = SimulationNodeDatum & {
   id: number;
@@ -71,6 +73,7 @@ export default function RelationshipMap({
   onMove,
   onArrange,
   focus,
+  hint,
 }: Props) {
   const svg = useRef<SVGSVGElement>(null);
   const positions = useRef(new Map<number, Point>());
@@ -138,11 +141,14 @@ export default function RelationshipMap({
                   x: target.x + Math.sin(p.id * 2.4) * 22,
                   y: target.y + Math.cos(p.id * 2.4) * 22,
                 }));
+      // A person you have placed stays where you put them; formations only
+      // seat people who have no saved position yet.
+      const placed = p.x !== null && p.y !== null;
       return {
         id: p.id,
         ...start,
-        tx: target.x,
-        ty: target.y,
+        tx: placed ? p.x! : target.x,
+        ty: placed ? p.y! : target.y,
         spacing: Math.max(
           42,
           Math.min(100, p.name.length * 3.6 + 18),
@@ -153,7 +159,18 @@ export default function RelationshipMap({
     savedCoordinates.current = new Map(
       graph.nodes.map((p) => [p.id, `${p.x}:${p.y}`]),
     );
-    const sim = forceSimulation(ns)
+    // "You" is a fixed body at the origin so nobody settles on top of it.
+    const you: Node = {
+      id: 0,
+      x: 0,
+      y: 0,
+      fx: 0,
+      fy: 0,
+      tx: 0,
+      ty: 0,
+      spacing: 78,
+    };
+    const sim = forceSimulation([...ns, you])
       .force("x", forceX<Node>((n) => n.tx).strength(0.055))
       .force("y", forceY<Node>((n) => n.ty).strength(0.055))
       .force("collision", forceCollide<Node>((n) => n.spacing).iterations(3))
@@ -547,7 +564,10 @@ export default function RelationshipMap({
         role="group"
         onPointerDown={(e) => start(e, "pan")}
         onDoubleClick={(e) => {
-          if (!(e.target as Element).closest(".map-person, .group-label")) {
+          if (
+            onCreate &&
+            !(e.target as Element).closest(".map-person, .group-label")
+          ) {
             const point = world(e);
             onCreate({
               ...point,
@@ -712,17 +732,24 @@ export default function RelationshipMap({
                 />
               ) : null;
             })}
-          <circle r="21" fill="#101620" stroke="#546478" strokeWidth=".8" />
-          <circle r="30" fill="none" stroke="#455164" strokeOpacity=".35" />
-          <text
-            textAnchor="middle"
-            y="4"
-            fill="#d0d9e6"
-            fontSize="10"
-            letterSpacing="1.5"
+          <g
+            className="map-you"
+            transform={`scale(${Math.max(1, 1.15 / camera.k)})`}
+            pointerEvents="none"
           >
-            YOU
-          </text>
+            <circle r="21" fill="#141c2b" stroke="#8fa3c4" strokeWidth="1" />
+            <circle r="29" fill="none" stroke="#6f7f9c" strokeOpacity=".4" />
+            <text
+              textAnchor="middle"
+              y="4"
+              fill="#eef3fb"
+              fontSize="10"
+              fontWeight="600"
+              letterSpacing="1.5"
+            >
+              YOU
+            </text>
+          </g>
           {graph.nodes.map((n) => {
             const p = positions.current.get(n.id);
             if (!p) return null;
@@ -1014,8 +1041,8 @@ export default function RelationshipMap({
       </div>
       {size.w >= 1000 && (
         <div className="map-instructions">
-          {settling ? "Constellations settling · " : "Drag to arrange · "}
-          Drop into a group to join · Double-click space to add
+          {hint ??
+            `${settling ? "Constellations settling" : "Drag to arrange"} · Drop into a group to join · Double-click space to add`}
         </div>
       )}
     </div>
