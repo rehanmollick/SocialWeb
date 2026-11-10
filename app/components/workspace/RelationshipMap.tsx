@@ -734,7 +734,7 @@ export default function RelationshipMap({
             })}
           <g
             className="map-you"
-            transform={`scale(${Math.max(1, 1.15 / camera.k)})`}
+            transform={`scale(${Math.min(3.2, Math.max(1, 1.15 / camera.k))})`}
             pointerEvents="none"
           >
             <circle r="21" fill="#141c2b" stroke="#8fa3c4" strokeWidth="1" />

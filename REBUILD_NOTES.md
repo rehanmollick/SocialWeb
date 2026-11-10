@@ -76,3 +76,35 @@ The browser suite uses a separate disposable `/tmp/socialweb-e2e.db`. It covers 
 Production build and TypeScript checking are required before delivery. Live paid Claude calls have not been exercised with a real key in this session. Tests cover offline behavior; actual provider availability and model output cannot be certified by these tests.
 
 This version has no sign-in, multi-device synchronization, or remote durable database. It is intended for a local single user. SVG and whole-database undo snapshots should be profiled before using thousands of people or very large journals. Phone ergonomics are secondary to the laptop target. Chat history is in memory rather than persisted between page reloads. Version 1 JSON backups need conversion; the original SQLite backup remains available.
+
+## November 2026 revamp
+
+Usage data drove this: 28 real people, zero notes, 23 with no labels. The map
+was not the problem; writing anything down took too many decisions.
+
+- The rebuild was promoted from a nested clone to the repo root and now runs on
+  the original database. Runtime migrations take the write lock, because several
+  build workers loading the module at once raced on `ALTER TABLE`.
+- Profiles open on bullet notes and a next step. Judgment labels and closeness
+  are behind a fold. Editing notes stamps `last_contact`, shown as "last
+  touched", so nobody fills in a date.
+- Next steps came back in a lighter form than the follow-up workflow removed in
+  September: one line per person, a Done button, no due dates.
+- Claude proposes; the user disposes. `/api/suggest` reads a saved profile and
+  returns circles and a next step as tap-to-accept chips. `/api/capture` sorts a
+  free-form brain dump into per-person bullets for review, then applies the
+  reviewed rows in one transaction (one Undo). This relaxes the September rule
+  that Claude only extracts names; it still never assigns judgment labels or
+  closeness, and never writes without a tap.
+- Radar is plain rules over saved fields (`lib/graph/nudges.ts`), not a model
+  call, so it is instant and free.
+- The Doing view feeds the same map component a derived graph with one virtual
+  node per person per circle. Dragging edits circle membership and never saves
+  positions.
+- Physics: a person with saved coordinates is anchored to them; formations only
+  seat people without a position. "You" is a fixed collision body at the origin.
+- Models: Ask uses `claude-opus-5-5`, filing uses `claude-haiku-5-5`, both
+  overridable by environment variable.
+- Phone access is the laptop serving the app behind a passcode (`proxy.ts`,
+  `bun run phone`). A hosted version would need the synchronous SQLite layer
+  replaced and was left for later.

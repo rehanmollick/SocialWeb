@@ -57,6 +57,8 @@ export default function Workspace() {
     [mode],
   );
   useEffect(() => {
+    // A phone is for looking someone up and jotting a note; start on the list.
+    if (window.innerWidth < 700) setView("people");
     const stored = localStorage.getItem("socialweb-mode");
     if (stored === "personal" || stored === "demo") return setMode(stored);
     // First visit: open your own people when there are any, else the demo.
@@ -1451,11 +1453,11 @@ export default function Workspace() {
                     </div>
                   </>
                 )}
-                <h3>Local for now</h3>
+                <h3>On your phone</h3>
                 <p>
-                  This version stores your data on this computer. Web deployment
-                  needs a persistent database and private sign-in before it is
-                  ready for your personal information.
+                  Your data stays on this computer. Run{" "}
+                  <code>bun run phone</code> to open it from your phone with a
+                  passcode, on the same Wi-Fi or anywhere through Tailscale.
                 </p>
               </section>
             </div>

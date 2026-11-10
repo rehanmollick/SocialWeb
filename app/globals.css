@@ -2650,3 +2650,35 @@ small {
 .judgment-details > summary small {
   margin-left: auto;
 }
+
+.login-page {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.login-page form {
+  display: grid;
+  gap: 14px;
+  width: min(320px, 100%);
+  text-align: center;
+}
+.login-page h1 {
+  margin: 0 0 8px;
+  font-size: 22px;
+  font-weight: 500;
+}
+.login-page label {
+  display: grid;
+  gap: 6px;
+  text-align: left;
+  color: var(--muted);
+}
+.login-page input {
+  font-size: 16px;
+  padding: 10px 12px;
+}
+.login-page [role="alert"] {
+  color: #e7a3a3;
+  margin: 0;
+}
