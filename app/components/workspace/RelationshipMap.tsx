@@ -51,6 +51,17 @@ type Props = {
   onArrange: (
     positions: { id: number; x: number; y: number }[],
   ) => Promise<void>;
+  // Groups with nobody in them yet, shown as empty drop zones.
+  emptyGroups?: string[];
+  // Several picked people dropped together; `bg` is the group they all join.
+  onMoveMany?: (
+    ids: number[],
+    bg: string,
+    positions: { id: number; x: number; y: number }[],
+  ) => Promise<void>;
+  // Option-drag from one person to another, or onto You.
+  onConnect?: (a: number, b: number) => void;
+  onCloser?: (id: number) => void;
   focus: number;
   // Replaces the default drag hint, for views where dropping means something else.
   hint?: string;
@@ -79,9 +90,14 @@ export default function RelationshipMap({
   onGroup,
   onMove,
   onArrange,
+  emptyGroups = [],
+  onMoveMany,
+  onConnect,
+  onCloser,
   focus,
   hint,
 }: Props) {
+  const [picked, setPicked] = useState<Set<number>>(new Set());
   const svg = useRef<SVGSVGElement>(null);
   const positions = useRef(new Map<number, Point>());
   const targets = useRef(new Map<number, Point>());
@@ -109,8 +125,10 @@ export default function RelationshipMap({
   const [labels, setLabels] = useState(true);
   const [hoveredPerson, setHoveredPerson] = useState<number | null>(null);
   const drag = useRef<{
-    kind: "node" | "pan" | "group";
+    kind: "node" | "pan" | "group" | "link" | "box";
     id?: number;
+    ids?: number[];
+    cursor?: Point;
     bg?: string;
     start: Point;
     origin: Point;
@@ -118,7 +136,32 @@ export default function RelationshipMap({
     points?: Map<number, Point>;
     bounds: ReturnType<typeof groupBounds>;
   } | null>(null);
-  const centers = groupBounds(graph.nodes, positions.current);
+  // While a person is being dragged their group's outline ignores them, so it
+  // holds still and you can see the moment you cross out of it.
+  const carried =
+    drag.current?.kind === "node" && drag.current.moved
+      ? new Set(drag.current.ids)
+      : new Set<number>();
+  const dragging = carried.size ? drag.current!.id! : null;
+  const centers = groupBounds(graph.nodes, positions.current, carried);
+  // Empty groups ring the populated ones. The ring is sized from settled
+  // targets, not live positions, so the zones hold still while you drag.
+  const ghostRing = Math.max(
+    380,
+    ...[...targets.current.values()].map((p) => Math.hypot(p.x, p.y) + 330),
+  );
+  const ghosts = emptyGroups.map((bg, i) => {
+    const angle = (i / emptyGroups.length) * Math.PI * 2 - Math.PI / 2;
+    return {
+      bg,
+      x: Math.cos(angle) * ghostRing,
+      y: Math.sin(angle) * ghostRing * 0.86,
+      r: 92,
+      ids: [] as number[],
+    };
+  });
+  const ghostsRef = useRef(ghosts);
+  ghostsRef.current = ghosts;
   useEffect(() => {
     const el = svg.current;
     if (!el) return;
@@ -133,6 +176,11 @@ export default function RelationshipMap({
   );
   useEffect(() => {
     if (drag.current) return;
+    // Only a new or unplaced person needs a full settle. After a drag everyone
+    // is already where they should be, so the map must not visibly reshuffle.
+    const fresh = graph.nodes.some(
+      (p) => p.x === null || p.y === null || !positions.current.has(p.id),
+    );
     targets.current = geometricTargets(graph.nodes, positions.current);
     const ns: Node[] = graph.nodes.map((p) => {
       const target = targets.current.get(p.id)!,
@@ -184,6 +232,7 @@ export default function RelationshipMap({
       .velocityDecay(0.62)
       .alphaDecay(0.027)
       .alphaMin(0.003);
+    if (!fresh) sim.alpha(0.08);
     simulation.current = sim;
     setSettling(ns.length > 0);
     const update = () => {
@@ -246,6 +295,7 @@ export default function RelationshipMap({
   }, [focus, selected, size]);
   function fit() {
     const bounds = [
+      ...ghostsRef.current,
       ...groupBounds(graph.nodes, positions.current),
       ...groupBounds(graph.nodes, targets.current),
     ];
@@ -338,6 +388,7 @@ export default function RelationshipMap({
         controlView();
         setCamera((c) => ({ ...c, k: Math.max(0.15, c.k / 1.25) }));
       }
+      if (e.key === "Escape") setPicked(new Set());
       if (e.key === "0") {
         e.preventDefault();
         controlView();
@@ -356,11 +407,34 @@ export default function RelationshipMap({
   };
   function start(
     e: React.PointerEvent,
-    kind: "node" | "pan" | "group",
+    base: "node" | "pan" | "group",
     id?: number,
     bg?: string,
   ) {
     if (e.button !== 0) return;
+    // Shift-click adds or removes a person from the picked set.
+    if (base === "node" && e.shiftKey) {
+      e.stopPropagation();
+      setPicked((v) => {
+        const next = new Set(v);
+        if (!next.delete(id!)) next.add(id!);
+        return next;
+      });
+      return;
+    }
+    // Option-drag draws a line; shift-drag on empty space draws a selection box.
+    const kind =
+      base === "node" && e.altKey
+        ? "link"
+        : base === "pan" && e.shiftKey
+          ? "box"
+          : base;
+    const ids =
+      kind !== "node"
+        ? []
+        : picked.has(id!) && picked.size > 1
+          ? [...picked]
+          : [id!];
     controlView();
     // A cooling simulation must never overwrite a user's drag with stale coordinates.
     simulation.current?.stop();
@@ -371,18 +445,21 @@ export default function RelationshipMap({
     drag.current = {
       kind,
       id,
+      ids,
       bg,
+      cursor: point,
       start: point,
       origin: kind === "pan" ? { x: e.clientX, y: e.clientY } : point,
       moved: false,
-      bounds: groupBounds(
-        graph.nodes,
-        positions.current,
-        new Set(id ? [id] : []),
-      ),
+      bounds: [
+        ...groupBounds(graph.nodes, positions.current, new Set(ids)),
+        ...ghostsRef.current,
+      ],
       points: new Map([...positions.current].map(([id, p]) => [id, { ...p }])),
     };
   }
+  const frame = useRef(0);
+  const labelCache = useRef<ReturnType<typeof placeNames> | null>(null);
   function move(e: React.PointerEvent) {
     const d = drag.current;
     if (!d) return;
@@ -398,19 +475,27 @@ export default function RelationshipMap({
     const dx = p.x - d.start.x,
       dy = p.y - d.start.y;
     if (Math.hypot(dx, dy) > 4 / camera.k) d.moved = true;
+    d.cursor = p;
     const ids =
-      d.kind === "node"
-        ? [d.id!]
-        : graph.nodes.filter((n) => n.bg === d.bg).map((n) => n.id);
+      d.kind === "link" || d.kind === "box"
+        ? []
+        : d.kind === "node"
+          ? d.ids!
+          : graph.nodes.filter((n) => n.bg === d.bg).map((n) => n.id);
     for (const id of ids) {
       const old = d.points!.get(id)!;
       positions.current.set(id, { x: old.x + dx, y: old.y + dy });
     }
-    if (d.kind === "node") {
-      const n = graph.nodes.find((n) => n.id === d.id)!;
-      setHover(dropTarget(positions.current.get(n.id)!, d.bounds, n.bg));
-    }
-    redraw((v) => v + 1);
+    if (frame.current) return;
+    frame.current = requestAnimationFrame(() => {
+      frame.current = 0;
+      const live = drag.current;
+      if (live?.kind === "node") {
+        const n = graph.nodes.find((n) => n.id === live.id)!;
+        setHover(dropTarget(positions.current.get(n.id)!, live.bounds, n.bg));
+      }
+      redraw((v) => v + 1);
+    });
   }
   function end(e: React.PointerEvent) {
     const d = drag.current;
@@ -422,6 +507,7 @@ export default function RelationshipMap({
     if (!d.moved) {
       if (d.kind === "node") onSelect(d.id!);
       if (d.kind === "group") onGroup(d.bg!);
+      if (d.kind === "pan" && picked.size) setPicked(new Set());
       if (simulation.current && simulation.current.alpha() > 0.003) {
         simulation.current.restart();
         setSettling(true);
@@ -436,20 +522,56 @@ export default function RelationshipMap({
       simulation.current.restart();
       setSettling(true);
     }
+    if (d.kind === "box") {
+      const [x1, x2] = [d.start.x, d.cursor!.x].sort((a, b) => a - b),
+        [y1, y2] = [d.start.y, d.cursor!.y].sort((a, b) => a - b);
+      setPicked((v) => {
+        const next = new Set(v);
+        for (const [id, p] of positions.current)
+          if (p.x >= x1 && p.x <= x2 && p.y >= y1 && p.y <= y2) next.add(id);
+        return next;
+      });
+      redraw((v) => v + 1);
+      return;
+    }
+    if (d.kind === "link") {
+      const at = d.cursor!;
+      if (Math.hypot(at.x, at.y) <= Math.max(40, 34 / camera.k))
+        onCloser?.(d.id!);
+      else {
+        const reach = Math.max(26, 22 / camera.k);
+        const near = [...positions.current]
+          .filter(([id]) => id !== d.id)
+          .map(([id, p]) => ({ id, far: Math.hypot(p.x - at.x, p.y - at.y) }))
+          .sort((a, b) => a.far - b.far)[0];
+        if (near && near.far <= reach) onConnect?.(d.id!, near.id);
+      }
+      redraw((v) => v + 1);
+      return;
+    }
+    if (d.kind === "node" && d.ids!.length > 1 && onMoveMany) {
+      const n = graph.nodes.find((n) => n.id === d.id)!;
+      const moving = new Set(d.ids);
+      const target = dropTarget(positions.current.get(n.id)!, d.bounds, n.bg);
+      const stays = !graph.nodes.some(
+        (o) => o.bg === n.bg && !moving.has(o.id),
+      );
+      redraw((v) => v + 1);
+      void onMoveMany(
+        d.ids!,
+        target ?? (stays ? n.bg : `g-${crypto.randomUUID()}`),
+        graph.nodes.map((n) => ({ id: n.id, ...positions.current.get(n.id)! })),
+      );
+      return;
+    }
     if (d.kind === "node") {
       const n = graph.nodes.find((n) => n.id === d.id)!;
       const p = positions.current.get(n.id)!;
-      const originalGroup = groupBounds(graph.nodes, d.points!).find(
-        (g) => g.bg === n.bg,
-      );
       const target = dropTarget(p, d.bounds, n.bg);
-      const bg =
-        target ??
-        (originalGroup &&
-        Math.hypot(p.x - originalGroup.x, p.y - originalGroup.y) <=
-          originalGroup.r
-          ? n.bg
-          : `g-${crypto.randomUUID()}`);
+      // Outside every outline starts a new group. Someone alone in their group
+      // just moves, since leaving would only recreate the same group of one.
+      const alone = !graph.nodes.some((o) => o.bg === n.bg && o.id !== n.id);
+      const bg = target ?? (alone ? n.bg : `g-${crypto.randomUUID()}`);
       const settled = clearDropPosition(
         p,
         [...positions.current]
@@ -523,44 +645,49 @@ export default function RelationshipMap({
     }
     return width;
   };
-  const nameLabels = placeNames(
-    graph.nodes.flatMap((n) => {
-      const p = positions.current.get(n.id);
-      if (!p) return [];
-      return [
-        {
-          id: n.id,
-          x: p.x * camera.k,
-          y: p.y * camera.k,
-          radius: nodeRadius(n) * camera.k,
-          halo: Math.max(
-            nodeRadius(n) * camera.k + 6 * detailScale,
-            n.tags.length ? traitRadius(n) + 6 * detailScale : 0,
-          ),
-          name: n.name,
-          priority:
-            Number(n.id === selected || n.id === hoveredPerson) * 100 +
-            Number(!filtering || matches.has(n.id)) * 20 +
-            Number(n.tags.includes("highsignal")) * 5,
-          force: n.id === selected || n.id === hoveredPerson,
-        },
-      ];
-    }),
-    camera.k,
-    measureName,
-    centers.map((g) => {
-      const text = `${groupName(g.bg, graph.bucketNames).toUpperCase()} · ${g.ids.length}`;
-      const width = measureName(text, 10) + text.length * 1.5 + 6,
-        x = g.x * camera.k,
-        y = (g.y - g.r - 12) * camera.k;
-      return {
-        left: x - width / 2,
-        right: x + width / 2,
-        top: y - 12,
-        bottom: y + 4,
-      };
-    }),
-  );
+  const moving = !!drag.current?.moved;
+  const nameLabels =
+    moving && labelCache.current
+      ? labelCache.current
+      : placeNames(
+          graph.nodes.flatMap((n) => {
+            const p = positions.current.get(n.id);
+            if (!p) return [];
+            return [
+              {
+                id: n.id,
+                x: p.x * camera.k,
+                y: p.y * camera.k,
+                radius: nodeRadius(n) * camera.k,
+                halo: Math.max(
+                  nodeRadius(n) * camera.k + 6 * detailScale,
+                  n.tags.length ? traitRadius(n) + 6 * detailScale : 0,
+                ),
+                name: n.name,
+                priority:
+                  Number(n.id === selected || n.id === hoveredPerson) * 100 +
+                  Number(!filtering || matches.has(n.id)) * 20 +
+                  Number(n.tags.includes("highsignal")) * 5,
+                force: n.id === selected || n.id === hoveredPerson,
+              },
+            ];
+          }),
+          camera.k,
+          measureName,
+          centers.map((g) => {
+            const text = `${groupName(g.bg, graph.bucketNames).toUpperCase()} · ${g.ids.length}`;
+            const width = measureName(text, 10) + text.length * 1.5 + 6,
+              x = g.x * camera.k,
+              y = (g.y - g.r - 12) * camera.k;
+            return {
+              left: x - width / 2,
+              right: x + width / 2,
+              top: y - 12,
+              bottom: y + 4,
+            };
+          }),
+        );
+  labelCache.current = nameLabels;
   return (
     <div className="map-stage" data-settling={settling}>
       <SpaceBackdrop />
@@ -647,7 +774,8 @@ export default function RelationshipMap({
                 r={g.r}
                 fill="transparent"
                 stroke="currentColor"
-                strokeOpacity={hover === g.bg ? 0.5 : 0.12}
+                strokeOpacity={hover === g.bg ? 0.95 : 0.12}
+                strokeWidth={(hover === g.bg ? 2 : 1) / camera.k}
                 strokeDasharray={hover === g.bg ? "6 4" : "2 8"}
                 onPointerDown={(e) => start(e, "group", undefined, g.bg)}
               />
@@ -664,6 +792,70 @@ export default function RelationshipMap({
               >
                 {groupName(g.bg, graph.bucketNames).toUpperCase()} ·{" "}
                 {g.ids.length}
+              </text>
+            </g>
+          ))}
+          {dragging !== null &&
+            !hover &&
+            graph.nodes.some(
+              (o) =>
+                !carried.has(o.id) &&
+                o.bg === graph.nodes.find((n) => n.id === dragging)?.bg,
+            ) &&
+            (() => {
+              const p = positions.current.get(dragging)!;
+              return (
+                <g className="new-group-ghost" pointerEvents="none">
+                  <circle
+                    cx={p.x}
+                    cy={p.y}
+                    r={80}
+                    fill="#c6d4f30d"
+                    stroke="#c6d4f3"
+                    strokeOpacity=".7"
+                    strokeWidth={1.2 / camera.k}
+                    strokeDasharray={`${5 / camera.k} ${4 / camera.k}`}
+                  />
+                  <text
+                    x={p.x}
+                    y={p.y - 80 - 10 / camera.k}
+                    textAnchor="middle"
+                    fill="#dbe3ff"
+                    fontSize={11 / camera.k}
+                    letterSpacing={1 / camera.k}
+                  >
+                    NEW GROUP
+                  </text>
+                </g>
+              );
+            })()}
+          {ghosts.map((g) => (
+            <g
+              key={g.bg}
+              className="empty-group"
+              data-empty-group={g.bg}
+              pointerEvents="none"
+            >
+              <circle
+                cx={g.x}
+                cy={g.y}
+                r={g.r}
+                fill={hover === g.bg ? "#c6d4f31a" : "#c6d4f308"}
+                stroke="#c6d4f3"
+                strokeOpacity={hover === g.bg ? 0.95 : 0.3}
+                strokeWidth={(hover === g.bg ? 2 : 1) / camera.k}
+                strokeDasharray={`${4 / camera.k} ${6 / camera.k}`}
+              />
+              <text
+                x={g.x}
+                y={g.y + 4 / camera.k}
+                textAnchor="middle"
+                fill="#c6d4f3"
+                fillOpacity={hover === g.bg ? 1 : 0.62}
+                fontSize={Math.min(36, 12.5 / camera.k)}
+                letterSpacing={0.6 / camera.k}
+              >
+                {groupName(g.bg, graph.bucketNames)}
               </text>
             </g>
           ))}
@@ -815,7 +1007,18 @@ export default function RelationshipMap({
                     strokeWidth="1"
                   />
                 )}
-                <circle r="22" fill="transparent" />
+                {/* Grab area stays finger-sized on screen at any zoom. */}
+                <circle r={Math.max(22, 20 / camera.k)} fill="transparent" />
+                {picked.has(n.id) && (
+                  <circle
+                    className="picked-ring"
+                    r={r + 9 / camera.k}
+                    fill="#c6d4f31f"
+                    stroke="#e8eeff"
+                    strokeWidth={1.4 / camera.k}
+                    strokeDasharray={`${3 / camera.k} ${3 / camera.k}`}
+                  />
+                )}
                 <circle
                   r={r + 5 / camera.k}
                   fill="none"
@@ -993,8 +1196,53 @@ export default function RelationshipMap({
               </g>
             );
           })}
+          {drag.current?.kind === "link" &&
+            drag.current.moved &&
+            (() => {
+              const from = positions.current.get(drag.current.id!)!,
+                to = drag.current.cursor!;
+              return (
+                <line
+                  className="link-preview"
+                  x1={from.x}
+                  y1={from.y}
+                  x2={to.x}
+                  y2={to.y}
+                  stroke="#e8eeff"
+                  strokeWidth={2 / camera.k}
+                  strokeDasharray={`${6 / camera.k} ${4 / camera.k}`}
+                  pointerEvents="none"
+                />
+              );
+            })()}
+          {drag.current?.kind === "box" &&
+            drag.current.moved &&
+            (() => {
+              const a = drag.current.start,
+                b = drag.current.cursor!;
+              return (
+                <rect
+                  className="pick-box"
+                  x={Math.min(a.x, b.x)}
+                  y={Math.min(a.y, b.y)}
+                  width={Math.abs(a.x - b.x)}
+                  height={Math.abs(a.y - b.y)}
+                  fill="#c6d4f314"
+                  stroke="#c6d4f3"
+                  strokeWidth={1 / camera.k}
+                  strokeDasharray={`${4 / camera.k} ${3 / camera.k}`}
+                  pointerEvents="none"
+                />
+              );
+            })()}
         </g>
       </svg>
+      {picked.size > 0 && (
+        <div className="picked-bar" role="status">
+          {picked.size} picked · drag one to move them all
+          <button onClick={() => setPicked(new Set())}>Clear</button>
+        </div>
+      )}
       <div className="map-legend">
         <button onClick={onLegend}>ⓘ Map key</button>
         <span>Color = group · ring = circles · line to you = how close</span>

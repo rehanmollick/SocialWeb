@@ -52,6 +52,18 @@ export const AREAS = [
   "Close friends",
   "Going out",
 ];
+// Ready-made situations for the "What's going on" view. They sit there as empty
+// drop zones until someone is dragged in, and Claude reuses the names.
+export const SCENARIOS = [
+  "Catch up soon",
+  "Grab a meal",
+  "Working together",
+  "Could open doors",
+  "Project crew",
+  "Party crew",
+  "Gym & sports",
+  "Owe them a reply",
+];
 export function groupName(bg: string, names: Record<string, string>) {
   return names[bg] || PRESETS[bg] || "New group";
 }

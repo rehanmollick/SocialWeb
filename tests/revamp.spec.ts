@@ -282,3 +282,52 @@ test("the list lies over the map without rebuilding it", async ({
   await expect(star).toHaveAttribute("data-same", "yes");
   expect(await star.boundingBox()).toEqual(before);
 });
+
+test("moves save a moment after the drag, scenarios are drop zones, and shortcuts work", async ({
+  page,
+  request,
+}) => {
+  const a = await create(request, {
+    name: "Mover One",
+    bg: "ut",
+    x: 200,
+    y: 0,
+  });
+  await create(request, { name: "Stayer Two", bg: "ut", x: 320, y: 60 });
+  await page.goto("/");
+  await expect(page.locator(".map-stage")).toHaveAttribute(
+    "data-settling",
+    "false",
+  );
+  const star = page.locator(`[data-person-id="${a}"] .map-star`);
+  const box = (await star.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x - 320, box.y - 160, { steps: 12 });
+  // Outside every outline: the app says what dropping here will do.
+  await expect(page.locator(".new-group-ghost")).toHaveCount(1);
+  await page.mouse.up();
+  // Shown at once as its own group, written to the server shortly after.
+  await expect(page.locator(".group-label")).toHaveCount(2);
+  expect((await people(request)).find((p) => p.id === a)).toMatchObject({
+    name: "Mover One",
+  });
+  const saved = async () =>
+    (await (await request.get("/api/graph")).json()).nodes.find(
+      (p: { id: number }) => p.id === a,
+    ).bg as string;
+  expect(await saved()).toBe("ut");
+  await expect.poll(saved, { timeout: 6000 }).not.toBe("ut");
+
+  // Keys: 2 switches view, where unused scenarios wait as drop zones.
+  await page.keyboard.press("2");
+  await expect(page.locator(".empty-group")).toHaveCount(8);
+  await page.keyboard.press("l");
+  await expect(page.locator(".list-overlay .person-card")).toHaveCount(2);
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".list-overlay")).toHaveCount(0);
+  await page.keyboard.press("?");
+  await expect(
+    page.getByRole("heading", { name: "Shortcuts", exact: true }),
+  ).toBeVisible();
+});

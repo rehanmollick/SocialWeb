@@ -2738,3 +2738,44 @@ small {
     opacity: 0;
   }
 }
+
+/* Shortcut key */
+.shortcut-key h3 {
+  margin: 18px 0 8px;
+}
+.shortcut {
+  display: grid;
+  grid-template-columns: minmax(0, 46%) 1fr;
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.shortcut kbd {
+  font: inherit;
+  font-size: 12px;
+  color: #dbe3ff;
+}
+.shortcut span {
+  color: var(--muted);
+}
+.picked-bar {
+  position: absolute;
+  top: 78px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 8px 7px 16px;
+  border: 1px solid #6f7fb8;
+  border-radius: 999px;
+  background: rgba(16, 21, 30, 0.92);
+  color: #dbe3ff;
+  font-size: 12.5px;
+}
+.picked-bar button {
+  padding: 3px 11px;
+  font-size: 11.5px;
+}

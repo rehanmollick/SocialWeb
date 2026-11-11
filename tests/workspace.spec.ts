@@ -449,7 +449,7 @@ test("drag joins groups without overlap or changing circles, survives reload", a
   await page.mouse.move(to.x, to.y, { steps: 15 });
   await page.mouse.up();
   await expect(page.locator('.workspace-footer [role="status"]')).toContainText(
-    "spatial home saved",
+    "Arrangement saved",
   );
   const graph = await (await request.get("/api/graph")).json();
   const moved = graph.nodes.find((p: { id: number }) => p.id === a);
@@ -525,7 +525,7 @@ test("whole-group drag keeps geometry, canceled drag makes no write, map double-
   );
   await page.mouse.up();
   await expect(page.locator('.workspace-footer [role="status"]')).toContainText(
-    "Group arrangement saved",
+    "Arrangement saved",
   );
   const g = await (await request.get("/api/graph")).json();
   const p = g.nodes.find((p: { id: number }) => p.id === a),

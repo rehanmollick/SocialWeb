@@ -1,5 +1,5 @@
 import { db } from "./db";
-import { stringList, AREAS } from "./graph/types";
+import { stringList, AREAS, SCENARIOS } from "./graph/types";
 import { structured } from "./ai";
 
 export type ProfileSuggestion = { circles: string[]; nextStep: string };
@@ -22,6 +22,7 @@ async function knownCircles() {
   return [
     ...new Set([
       ...AREAS,
+      ...SCENARIOS,
       ...(await db.query.people.findMany()).flatMap((p) =>
         stringList(p.circles),
       ),

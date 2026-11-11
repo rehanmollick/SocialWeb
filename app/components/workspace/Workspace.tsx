@@ -13,6 +13,7 @@ import { closeness, closenessLevel } from "@/lib/graph/indicators";
 import {
   colorFor,
   groupName,
+  SCENARIOS,
   type Graph,
   type Memory,
   type Person,
@@ -137,6 +138,16 @@ export default function Workspace() {
                 : editing
                   ? "profile"
                   : "ask";
+  // Lets the one-time key listener open tools with current state.
+  const toolRef2 = useRef<(tool: string) => void>(() => {});
+  toolRef2.current = (tool) => {
+    if (tool === "dump" && !ai) {
+      setMemoryDraft(null);
+      return showTool("memory");
+    }
+    if (tool === "add") setAddPoint(addDrafts[addDraftKey]?.point ?? null);
+    showTool(tool as Parameters<typeof showTool>[0]);
+  };
   const toolRef = useRef({ activeTool, memoryDraftKey });
   toolRef.current = { activeTool, memoryDraftKey };
   const [linkA, setLinkA] = useState("");
@@ -146,6 +157,22 @@ export default function Workspace() {
   const [rightOpen, setRightOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
+  // Map moves show at once and are saved a moment after you stop dragging, in
+  // one request, so arranging never waits on the network.
+  const pendingMoves = useRef(
+    new Map<number, { x: number; y: number; bg?: string }>(),
+  );
+  const moveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const withMoves = (g: Graph): Graph =>
+    pendingMoves.current.size
+      ? {
+          ...g,
+          nodes: g.nodes.map((n) => {
+            const p = pendingMoves.current.get(n.id);
+            return p ? { ...n, x: p.x, y: p.y, bg: p.bg ?? n.bg } : n;
+          }),
+        }
+      : g;
   const refresh = useCallback(async () => {
     const [g, m, h, s] = await Promise.all([
       api("graph"),
@@ -153,7 +180,7 @@ export default function Workspace() {
       api("history"),
       api("status"),
     ]);
-    setGraph(g);
+    setGraph(withMoves(g));
     setMemories(m.thoughts);
     setHistory(h.entries[0]?.label ?? "");
     setAi(s.ai);
@@ -168,6 +195,35 @@ export default function Workspace() {
         e.preventDefault();
         setLeftOpen(true);
         setTimeout(() => searchRef.current?.focus(), 0);
+      }
+      const typing = (e.target as HTMLElement).closest(
+        "input,textarea,select,[contenteditable=true]",
+      );
+      if ((e.metaKey || e.ctrlKey) && e.key === "z" && !typing) {
+        e.preventDefault();
+        void undoRef.current();
+      }
+      if (!typing && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        const key = e.key.toLowerCase();
+        const act: Record<string, () => void> = {
+          "1": () => setView("map"),
+          "2": () => setView("doing"),
+          l: () =>
+            setView((v) => (v === "people" ? lastMap.current : "people")),
+          n: () => toolRef2.current("add"),
+          b: () => toolRef2.current("dump"),
+          r: () => toolRef2.current("radar"),
+          a: () => toolRef2.current("ask"),
+          "?": () => toolRef2.current("help"),
+          "/": () => {
+            setLeftOpen(true);
+            setTimeout(() => searchRef.current?.focus(), 0);
+          },
+        };
+        if (act[key]) {
+          e.preventDefault();
+          act[key]();
+        }
       }
       if (e.key === "Escape") {
         setDumping(false);
@@ -209,9 +265,70 @@ export default function Workspace() {
     mutations.current = job;
     await job;
   }
+  async function flushMoves() {
+    if (moveTimer.current) clearTimeout(moveTimer.current);
+    moveTimer.current = null;
+    if (!pendingMoves.current.size) return;
+    const batch = pendingMoves.current;
+    pendingMoves.current = new Map();
+    await action(
+      () =>
+        personalApi("people/positions", "POST", {
+          positions: [...batch].map(([id, p]) => ({ id, ...p })),
+        }),
+      "Arrangement saved.",
+    ).catch(() => {});
+  }
+  const flushRef = useRef(flushMoves);
+  flushRef.current = flushMoves;
+  function queueMoves(
+    positions: { id: number; x: number; y: number }[],
+    joined?: { ids: number[]; bg: string },
+  ) {
+    for (const p of positions)
+      pendingMoves.current.set(p.id, {
+        x: p.x,
+        y: p.y,
+        bg: joined?.ids.includes(p.id)
+          ? joined.bg
+          : pendingMoves.current.get(p.id)?.bg,
+      });
+    setGraph((g) => withMoves(g));
+    if (moveTimer.current) clearTimeout(moveTimer.current);
+    moveTimer.current = setTimeout(() => void flushRef.current(), 1600);
+  }
+  useEffect(() => {
+    // Leaving the page with unsaved moves: hand them to the browser to deliver.
+    const leave = () => {
+      if (!pendingMoves.current.size) return;
+      navigator.sendBeacon(
+        "/api/people/positions",
+        new Blob(
+          [
+            JSON.stringify({
+              positions: [...pendingMoves.current].map(([id, p]) => ({
+                id,
+                ...p,
+              })),
+            }),
+          ],
+          { type: "application/json" },
+        ),
+      );
+      pendingMoves.current = new Map();
+    };
+    window.addEventListener("pagehide", leave);
+    return () => window.removeEventListener("pagehide", leave);
+  }, []);
   function run(fn: () => Promise<unknown>, message: string) {
     void action(fn, message).catch(() => {});
   }
+  async function undo() {
+    await flushMoves();
+    run(() => api("history", "POST"), "Last change undone.");
+  }
+  const undoRef = useRef(undo);
+  undoRef.current = undo;
   function select(id: number) {
     setSelected(id);
     showTool("profile");
@@ -304,6 +421,10 @@ export default function Workspace() {
     return {
       names,
       key,
+      // Scenarios nobody is in yet wait around the edge as drop zones.
+      empty: SCENARIOS.filter(
+        (c) => !names.some((n) => n.toLowerCase() === c.toLowerCase()),
+      ).map((c) => `${NO_CIRCLE}${c}`),
       graph: {
         nodes: graph.nodes.flatMap((p) =>
           (p.circles.length ? p.circles : [""]).map((c) => ({
@@ -319,11 +440,60 @@ export default function Workspace() {
         clusterEdges: [],
         bucketNames: {
           [NO_CIRCLE]: "Nothing going on yet",
-          ...Object.fromEntries(names.map((c) => [`${NO_CIRCLE}${c}`, c])),
+          ...Object.fromEntries(
+            [...SCENARIOS, ...names].map((c) => [`${NO_CIRCLE}${c}`, c]),
+          ),
         },
       } satisfies Graph,
     };
   }, [graph.nodes]);
+  // Doing view: dropping into a circle adds it, dropping outside removes the
+  // circle the copy was dragged from.
+  async function regroup(virtualIds: number[], bg: string) {
+    const to = bg.startsWith(NO_CIRCLE) ? bg.slice(NO_CIRCLE.length) : "";
+    const changes = new Map<number, string[]>();
+    for (const id of virtualIds) {
+      const who = graph.nodes.find((p) => p.id === Math.floor(-id / SLOTS));
+      if (!who) continue;
+      const from = doing.names[(-id % SLOTS) - 1] ?? "";
+      if (to === from && bg.startsWith(NO_CIRCLE)) continue;
+      const circles = (changes.get(who.id) ?? who.circles).filter(
+        (c) => c !== from,
+      );
+      if (to && !circles.includes(to)) circles.push(to);
+      changes.set(who.id, circles);
+    }
+    if (!changes.size) return;
+    await action(
+      async () => {
+        for (const [id, circles] of changes)
+          await api(`people/${id}`, "PATCH", { circles });
+      },
+      to
+        ? `${changes.size === 1 ? "1 person is" : `${changes.size} people are`} now in ${to}.`
+        : "Removed from the circle.",
+    ).catch(() => {});
+  }
+  function connect(a: number, b: number) {
+    if (a === b) return;
+    const names = [a, b].map(
+      (id) => graph.nodes.find((p) => p.id === id)?.name,
+    );
+    run(
+      () => api("edges", "POST", { a, b, weight: 5 }),
+      `${names[0]} and ${names[1]} are connected.`,
+    );
+  }
+  // A line drawn to You: first Close, then Inner circle.
+  function closer(id: number) {
+    const who = graph.nodes.find((p) => p.id === id);
+    if (!who) return;
+    const strength = who.strength >= 8 ? 10 : 8;
+    run(
+      () => api(`people/${id}`, "PATCH", { strength }),
+      `${who.name} is now ${strength === 10 ? "inner circle" : "close"}.`,
+    );
+  }
   const doingMatches = useMemo(
     () =>
       new Set(
@@ -751,23 +921,15 @@ export default function Workspace() {
                       `Viewing ${groupName(bg, graph.bucketNames)}. Use Settings to rename groups.`,
                     );
                   }}
-                  onMove={async (id, x, y, bg, positions) => {
-                    await action(
-                      () =>
-                        api("people/positions", "POST", {
-                          positions: positions.map((p) =>
-                            p.id === id ? { ...p, x, y, bg } : p,
-                          ),
-                        }),
-                      "Position and spatial home saved. Circles preserved.",
-                    ).catch(() => {});
-                  }}
-                  onArrange={async (positions) => {
-                    await action(
-                      () => api("people/positions", "POST", { positions }),
-                      "Group arrangement saved.",
-                    ).catch(() => {});
-                  }}
+                  onMove={async (id, _x, _y, bg, positions) =>
+                    queueMoves(positions, { ids: [id], bg })
+                  }
+                  onArrange={async (positions) => queueMoves(positions)}
+                  onMoveMany={async (ids, bg, positions) =>
+                    queueMoves(positions, { ids, bg })
+                  }
+                  onConnect={(a, b) => connect(a, b)}
+                  onCloser={(id) => closer(id)}
                 />
                 {!graph.nodes.length && (
                   <div className="map-empty">
@@ -816,38 +978,15 @@ export default function Workspace() {
                           : "People with nothing going on yet. Drag one into a circle.",
                       );
                     }}
-                    onMove={async (id, _x, _y, bg) => {
-                      const who = graph.nodes.find(
-                        (p) => p.id === Math.floor(-id / SLOTS),
-                      );
-                      if (!who) return;
-                      const from = doing.names[(-id % SLOTS) - 1] ?? "";
-                      const to = bg.startsWith(NO_CIRCLE)
-                        ? bg.slice(NO_CIRCLE.length)
-                        : "";
-                      if (to === from && bg.startsWith(NO_CIRCLE)) return;
-                      const circles = who.circles.filter((c) => c !== from);
-                      if (to && !circles.includes(to)) circles.push(to);
-                      await action(
-                        () => api(`people/${who.id}`, "PATCH", { circles }),
-                        to
-                          ? `${who.name} is now in ${to}.`
-                          : `${who.name} left ${from || "the circle"}.`,
-                      ).catch(() => {});
-                    }}
+                    emptyGroups={doing.empty}
+                    onMove={async (id, _x, _y, bg) => regroup([id], bg)}
+                    onMoveMany={async (ids, bg) => regroup(ids, bg)}
+                    onConnect={(a, b) =>
+                      connect(Math.floor(-a / SLOTS), Math.floor(-b / SLOTS))
+                    }
+                    onCloser={(id) => closer(Math.floor(-id / SLOTS))}
                     onArrange={async () => {}}
                   />
-                  {!doing.names.length && (
-                    <div className="map-empty doing-empty">
-                      <span>✦</span>
-                      <h2>Nothing going on yet.</h2>
-                      <p>
-                        Open someone and write a line about what you do
-                        together, or use Brain dump. Circles appear here as you
-                        add them.
-                      </p>
-                    </div>
-                  )}
                 </div>
               )}
               {view === "people" && (
@@ -981,7 +1120,7 @@ export default function Workspace() {
               onClick={() =>
                 (() => {
                   closeTool();
-                  run(() => api("history", "POST"), "Last change undone.");
+                  void undo();
                 })()
               }
             >
@@ -1427,45 +1566,63 @@ export default function Workspace() {
                 aria-labelledby="help-title"
               >
                 <header>
-                  <h2 id="help-title">A map with meaning.</h2>
+                  <h2 id="help-title">Shortcuts</h2>
                   <button aria-label="Close help" onClick={closeTool}>
                     ×
                   </button>
                 </header>
-                <div className="help-grid">
-                  <article>
-                    <b>01 / Spatial homes</b>
-                    <p>
-                      Drag someone inside a group’s boundary to move them into
-                      it. Drop them outside all groups to give them a separate
-                      home. Drag a boundary to move the whole group.
-                    </p>
-                  </article>
-                  <article>
-                    <b>02 / Overlapping circles</b>
-                    <p>
-                      People can be creators, UT friends, and startup
-                      collaborators at once. Add circles in their profile.
-                      Filters highlight them without moving the map.
-                    </p>
-                  </article>
-                  <article>
-                    <b>03 / Your judgment</b>
-                    <p>
-                      ✦ High signal and ϟ high agency are labels you assign.
-                      Node size and a 1–5 badge show closeness; ring segments
-                      show every circle. Lines represent explicit connections.
-                      Group placement is an arrangement, not a score.
-                    </p>
-                  </article>
-                  <article>
-                    <b>04 / Remember effortlessly</b>
-                    <p>
-                      Add one name, paste a list, or double-click empty space.
-                      Save memories and ask Claude about what you’ve saved. Undo
-                      recovers the last 25 changes.
-                    </p>
-                  </article>
+                <div className="shortcut-key">
+                  {(
+                    [
+                      ["On the map", ""],
+                      ["Click a person", "Open their notes"],
+                      [
+                        "Drag a person",
+                        "Move them; drop in a group to join, outside to start a new group",
+                      ],
+                      ["Shift + click", "Pick or unpick a person"],
+                      [
+                        "Shift + drag on empty space",
+                        "Box-pick everyone inside",
+                      ],
+                      ["Drag a picked person", "Move everyone picked together"],
+                      [
+                        "⌥ Option + drag person → person",
+                        "Draw a connection between them",
+                      ],
+                      [
+                        "⌥ Option + drag person → You",
+                        "Mark them close (again for inner circle)",
+                      ],
+                      [
+                        "Drag a group's outline or name",
+                        "Move the whole group",
+                      ],
+                      ["Double-click empty space", "Add someone there"],
+                      ["Scroll / pinch", "Zoom"],
+                      ["+  −  0", "Zoom in, zoom out, fit everything"],
+                      ["Anywhere", ""],
+                      ["1  2", "Where they're from / What's going on"],
+                      ["L", "List of everyone"],
+                      ["N", "Add people"],
+                      ["B", "Brain dump"],
+                      ["R", "Radar"],
+                      ["A", "Ask Claude"],
+                      ["/  or  ⌘K", "Search"],
+                      ["⌘Z", "Undo"],
+                      ["Esc", "Close panels, clear picks"],
+                      ["?", "This list"],
+                    ] as const
+                  ).map(([keys, does]) =>
+                    does ? (
+                      <div className="shortcut" key={keys}>
+                        <kbd>{keys}</kbd>
+                        <span>{does}</span>
+                      </div>
+                    ) : (
+                      <h3 key={keys}>{keys}</h3>
+                    ),
+                  )}
                 </div>
               </section>
             </div>

@@ -65,7 +65,8 @@ export function useProfileAutosave(
     pending.current(serialized !== saved.current);
     if (serialized === saved.current) return;
     setStatus("Saving…");
-    const timer = setTimeout(() => void flush.current(), 350);
+    // Long enough that a pause mid-thought does not fire a save.
+    const timer = setTimeout(() => void flush.current(), 900);
     return () => clearTimeout(timer);
   }, [serialized]);
   useEffect(() => {
