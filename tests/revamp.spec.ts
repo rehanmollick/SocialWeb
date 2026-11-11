@@ -368,7 +368,20 @@ test("drawing a line again strengthens it, clicking it removes it, and circles s
   await expect.poll(weight).toBe(5);
   const from = await at(a),
     to = await at(b);
+  // One click only selects the line; nothing is removed yet.
   await page.mouse.click((from.x + to.x) / 2, (from.y + to.y) / 2);
+  await expect(page.getByRole("button", { name: "Remove line" })).toBeVisible();
+  await page.waitForTimeout(600);
+  expect(await weight()).toBe(5);
+  // Clicking empty space lets go of it.
+  await page.mouse.click(from.x, from.y - 200);
+  await expect(page.getByRole("button", { name: "Remove line" })).toHaveCount(
+    0,
+  );
+  expect(await weight()).toBe(5);
+  // Select again and confirm with the Delete key.
+  await page.mouse.click((from.x + to.x) / 2, (from.y + to.y) / 2);
+  await page.keyboard.press("Delete");
   await expect.poll(weight).toBe(0);
 
   // In the circles view, moving one person leaves everyone else exactly put.

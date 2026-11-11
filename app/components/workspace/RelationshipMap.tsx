@@ -176,6 +176,44 @@ export default function RelationshipMap({
     })
     .filter((g) => !graph.nodes.some((n) => n.bg === g.bg));
   const [hotLine, setHotLine] = useState<string | null>(null);
+  // A clicked line is only selected. Removing it takes a second, deliberate
+  // step: the Remove button that appears on it, or the Delete key.
+  const [chosenLine, setChosenLine] = useState<string | null>(null);
+  const removeLine = (key: string) => {
+    setChosenLine(null);
+    setHotLine(null);
+    if (key.startsWith("me-")) onLooser?.(Number(key.slice(3)));
+    else {
+      const [a, b] = key.split("~").map(Number);
+      onDisconnect?.(a, b);
+    }
+  };
+  const chosenRef = useRef({ chosenLine, removeLine });
+  chosenRef.current = { chosenLine, removeLine };
+  const removeButton = (x: number, y: number, key: string) => (
+    <g
+      className="line-remove"
+      transform={`translate(${x},${y}) scale(${1 / camera.k})`}
+      role="button"
+      aria-label="Remove line"
+      style={{ cursor: "pointer" }}
+      onPointerDown={(ev) => ev.stopPropagation()}
+      onClick={() => removeLine(key)}
+    >
+      <rect
+        x={-58}
+        y={-15}
+        width={116}
+        height={30}
+        rx={15}
+        fill="#2a1418"
+        stroke="#ffb4b4"
+      />
+      <text textAnchor="middle" y={4.5} fontSize={12.5} fill="#ffd9d9">
+        × Remove line
+      </text>
+    </g>
+  );
   const lastDrop = useRef<Point | null>(null);
   const ghostsRef = useRef(ghosts);
   ghostsRef.current = ghosts;
@@ -415,7 +453,17 @@ export default function RelationshipMap({
         controlView();
         setCamera((c) => ({ ...c, k: Math.max(0.15, c.k / 1.25) }));
       }
-      if (e.key === "Escape") setPicked(new Set());
+      if (e.key === "Escape") {
+        setPicked(new Set());
+        setChosenLine(null);
+      }
+      if (
+        (e.key === "Delete" || e.key === "Backspace") &&
+        chosenRef.current.chosenLine
+      ) {
+        e.preventDefault();
+        chosenRef.current.removeLine(chosenRef.current.chosenLine);
+      }
       if (e.key === "0") {
         e.preventDefault();
         controlView();
@@ -439,6 +487,8 @@ export default function RelationshipMap({
     bg?: string,
   ) {
     if (e.button !== 0) return;
+    // Pressing anywhere else on the map lets go of a selected line.
+    if (chosenLine) setChosenLine(null);
     // Shift-click adds or removes a person from the picked set.
     if (base === "node" && e.shiftKey) {
       e.stopPropagation();
@@ -911,8 +961,9 @@ export default function RelationshipMap({
               b = positions.current.get(e.target);
             if (!a || !b) return null;
             const active = selected === e.source || selected === e.target;
-            const key = `${e.source}-${e.target}`,
-              hot = hotLine === key;
+            const key = `${e.source}~${e.target}`,
+              chosen = chosenLine === key,
+              hot = hotLine === key || chosen;
             // 1px at the weakest up to a clear 6px band at the strongest.
             const width = (1 + Math.pow(e.weight / 10, 1.6) * 5) / camera.k;
             return (
@@ -922,7 +973,9 @@ export default function RelationshipMap({
                   y1={a.y}
                   x2={b.x}
                   y2={b.y}
-                  stroke={hot ? "#ffb4b4" : active ? "#c6d8ee" : "#9fb0cc"}
+                  stroke={
+                    chosen ? "#ffb4b4" : hot || active ? "#e3ecfa" : "#9fb0cc"
+                  }
                   strokeLinecap="round"
                   strokeWidth={width}
                   strokeOpacity={
@@ -948,35 +1001,12 @@ export default function RelationshipMap({
                     onPointerEnter={() => setHotLine(key)}
                     onPointerLeave={() => setHotLine(null)}
                     onPointerDown={(ev) => ev.stopPropagation()}
-                    onClick={() => {
-                      setHotLine(null);
-                      onDisconnect(e.source, e.target);
-                    }}
+                    onClick={() => setChosenLine(chosen ? null : key)}
                   >
-                    <title>Click to remove this line</title>
+                    <title>Click to select this line</title>
                   </line>
                 )}
-                {hot && (
-                  <g
-                    transform={`translate(${(a.x + b.x) / 2},${(a.y + b.y) / 2})`}
-                    pointerEvents="none"
-                  >
-                    <circle
-                      r={9 / camera.k}
-                      fill="#2a1418"
-                      stroke="#ffb4b4"
-                      strokeWidth={1 / camera.k}
-                    />
-                    <text
-                      textAnchor="middle"
-                      y={4 / camera.k}
-                      fontSize={13 / camera.k}
-                      fill="#ffd0d0"
-                    >
-                      ×
-                    </text>
-                  </g>
-                )}
+                {chosen && removeButton((a.x + b.x) / 2, (a.y + b.y) / 2, key)}
               </g>
             );
           })}
@@ -994,14 +1024,18 @@ export default function RelationshipMap({
                   y1={0}
                   x2={p.x}
                   y2={p.y}
-                  stroke={hotLine === `me-${n.id}` ? "#ffb4b4" : colorFor(n.bg)}
+                  stroke={
+                    chosenLine === `me-${n.id}` ? "#ffb4b4" : colorFor(n.bg)
+                  }
                   strokeLinecap="round"
                   strokeWidth={
-                    Math.max(bondWidth(n), hotLine === `me-${n.id}` ? 3 : 0) /
-                    camera.k
+                    Math.max(
+                      bondWidth(n),
+                      chosenLine === `me-${n.id}` ? 3 : 0,
+                    ) / camera.k
                   }
                   strokeOpacity={
-                    hotLine === `me-${n.id}`
+                    hotLine === `me-${n.id}` || chosenLine === `me-${n.id}`
                       ? 0.9
                       : filtering && !matches.has(n.id)
                         ? 0.06
@@ -1014,15 +1048,22 @@ export default function RelationshipMap({
                   onPointerEnter={() => setHotLine(`me-${n.id}`)}
                   onPointerLeave={() => setHotLine(null)}
                   onPointerDown={(ev) => onLooser && ev.stopPropagation()}
-                  onClick={() => {
-                    setHotLine(null);
-                    onLooser?.(n.id);
-                  }}
+                  onClick={() =>
+                    onLooser &&
+                    setChosenLine((v) =>
+                      v === `me-${n.id}` ? null : `me-${n.id}`,
+                    )
+                  }
                 >
-                  {onLooser && <title>Click to remove this line</title>}
+                  {onLooser && <title>Click to select this line</title>}
                 </line>
               ) : null;
             })}
+          {chosenLine?.startsWith("me-") &&
+            (() => {
+              const p = positions.current.get(Number(chosenLine.slice(3)));
+              return p ? removeButton(p.x / 2, p.y / 2, chosenLine) : null;
+            })()}
           <g
             className="map-you"
             transform={`scale(${Math.min(3.2, Math.max(1, 1.15 / camera.k))})`}

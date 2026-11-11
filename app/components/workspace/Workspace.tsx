@@ -1625,7 +1625,10 @@ export default function Workspace() {
                         "⌥ Option + drag person → person",
                         "Draw a line between them; again to make it stronger",
                       ],
-                      ["Click a line", "Remove it"],
+                      [
+                        "Click a line",
+                        "Select it; then press Delete or its Remove button",
+                      ],
                       [
                         "⌥ Option + drag person → You",
                         "Mark them close (again for inner circle)",
