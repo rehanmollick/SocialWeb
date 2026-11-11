@@ -331,3 +331,87 @@ test("moves save a moment after the drag, scenarios are drop zones, and shortcut
     page.getByRole("heading", { name: "Shortcuts", exact: true }),
   ).toBeVisible();
 });
+
+test("drawing a line again strengthens it, clicking it removes it, and circles stay calm", async ({
+  page,
+  request,
+}) => {
+  const a = await create(request, { name: "Line Start", x: -220, y: 240 });
+  const b = await create(request, { name: "Line End", x: 220, y: 240 });
+  const c = await create(request, { name: "Bystander", x: 0, y: -260 });
+  await page.goto("/");
+  await expect(page.locator(".map-stage")).toHaveAttribute(
+    "data-settling",
+    "false",
+  );
+  const at = async (id: number, scope = "") => {
+    const box = (await page
+      .locator(`${scope}[data-person-id="${id}"] .map-star`)
+      .boundingBox())!;
+    return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  };
+  const weight = async () =>
+    (await (await request.get("/api/graph")).json()).edges[0]?.weight ?? 0;
+  const draw = async () => {
+    const from = await at(a),
+      to = await at(b);
+    await page.keyboard.down("Alt");
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(to.x, to.y, { steps: 8 });
+    await page.mouse.up();
+    await page.keyboard.up("Alt");
+  };
+  await draw();
+  await expect.poll(weight).toBe(3);
+  await draw();
+  await expect.poll(weight).toBe(5);
+  const from = await at(a),
+    to = await at(b);
+  await page.mouse.click((from.x + to.x) / 2, (from.y + to.y) / 2);
+  await expect.poll(weight).toBe(0);
+
+  // In the circles view, moving one person leaves everyone else exactly put.
+  await page.keyboard.press("2");
+  const live = ".map-wrap:not(.map-hidden) ";
+  await expect(page.locator(`${live}.map-stage`)).toHaveAttribute(
+    "data-settling",
+    "false",
+  );
+  const stars = page.locator(`${live}.map-person`);
+  await expect(stars).toHaveCount(3);
+  const where = async (name: string) =>
+    (await page
+      .locator(`${live}.map-person`, { hasText: name })
+      .locator(".map-star")
+      .boundingBox())!;
+  const bystander = await where("Bystander"),
+    other = await where("Line End"),
+    mover = await where("Line Start");
+  const zone = (await page
+    .locator('[data-empty-group="circle:Grab a meal"] circle')
+    .boundingBox())!;
+  await page.mouse.move(mover.x + mover.width / 2, mover.y + mover.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(zone.x + zone.width / 2, zone.y + zone.height / 2, {
+    steps: 14,
+  });
+  await page.mouse.up();
+  await expect
+    .poll(async () => (await people(request)).find((p) => p.id === a)!.circles)
+    .toEqual(["Grab a meal"]);
+  await expect(page.locator(`${live}.map-stage`)).toHaveAttribute(
+    "data-settling",
+    "false",
+  );
+  expect(await where("Bystander")).toEqual(bystander);
+  expect(await where("Line End")).toEqual(other);
+  const landed = await where("Line Start");
+  expect(
+    Math.hypot(
+      landed.x + landed.width / 2 - (zone.x + zone.width / 2),
+      landed.y + landed.height / 2 - (zone.y + zone.height / 2),
+    ),
+  ).toBeLessThan(30);
+  expect(c).toBeGreaterThan(0);
+});

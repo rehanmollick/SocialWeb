@@ -414,17 +414,25 @@ export default function Workspace() {
     if (view === "doing") setDoingOpened(true);
   }, [view]);
   const radarItems = useMemo(() => findNudges(graph.nodes), [graph.nodes]);
+  const circleSlots = useRef(new Map<string, number>());
+  const circleAt = (virtualId: number) =>
+    [...circleSlots.current].find(
+      ([, slot]) => slot === -virtualId % SLOTS,
+    )?.[0] ?? "";
   const doing = useMemo(() => {
     const names = [...new Set(graph.nodes.flatMap((p) => p.circles))].sort();
+    // A circle keeps the same slot number for the whole session, so adding a
+    // circle never renumbers (and so never re-lays-out) everyone else.
+    for (const c of names)
+      if (!circleSlots.current.has(c))
+        circleSlots.current.set(c, circleSlots.current.size + 1);
     const key = (p: Person, c: string) =>
-      -(p.id * SLOTS + (c ? names.indexOf(c) + 1 : 0));
+      -(p.id * SLOTS + (c ? circleSlots.current.get(c)! : 0));
     return {
       names,
       key,
       // Scenarios nobody is in yet wait around the edge as drop zones.
-      empty: SCENARIOS.filter(
-        (c) => !names.some((n) => n.toLowerCase() === c.toLowerCase()),
-      ).map((c) => `${NO_CIRCLE}${c}`),
+      zones: SCENARIOS.map((c) => `${NO_CIRCLE}${c}`),
       graph: {
         nodes: graph.nodes.flatMap((p) =>
           (p.circles.length ? p.circles : [""]).map((c) => ({
@@ -455,7 +463,7 @@ export default function Workspace() {
     for (const id of virtualIds) {
       const who = graph.nodes.find((p) => p.id === Math.floor(-id / SLOTS));
       if (!who) continue;
-      const from = doing.names[(-id % SLOTS) - 1] ?? "";
+      const from = circleAt(id);
       if (to === from && bg.startsWith(NO_CIRCLE)) continue;
       const circles = (changes.get(who.id) ?? who.circles).filter(
         (c) => c !== from,
@@ -479,9 +487,20 @@ export default function Workspace() {
     const names = [a, b].map(
       (id) => graph.nodes.find((p) => p.id === id)?.name,
     );
+    // Drawing the same line again makes it stronger.
+    const existing = graph.edges.find(
+      (e) =>
+        (e.source === a && e.target === b) ||
+        (e.source === b && e.target === a),
+    );
+    const weight = existing ? Math.min(10, existing.weight + 2) : 3;
     run(
-      () => api("edges", "POST", { a, b, weight: 5 }),
-      `${names[0]} and ${names[1]} are connected.`,
+      () => api("edges", "POST", { a, b, weight }),
+      existing
+        ? weight === existing.weight
+          ? `${names[0]} and ${names[1]} are as connected as it gets.`
+          : `${names[0]} and ${names[1]}: stronger (${weight}/10).`
+        : `${names[0]} and ${names[1]} are connected. Draw it again to strengthen.`,
     );
   }
   // A line drawn to You: first Close, then Inner circle.
@@ -586,11 +605,12 @@ export default function Workspace() {
             {radarItems.length > 0 && <b>{radarItems.length}</b>}
           </button>
           <button
-            className="subtle"
+            className="subtle shortcuts-button"
             onClick={() => showTool("help")}
-            aria-label="How to use SocialWeb"
+            aria-label="Keyboard shortcuts"
+            title="Shortcuts and gestures (press ?)"
           >
-            ?
+            ⌨ Shortcuts
           </button>
           <button className="subtle" onClick={() => showTool("settings")}>
             Settings
@@ -930,6 +950,20 @@ export default function Workspace() {
                   }
                   onConnect={(a, b) => connect(a, b)}
                   onCloser={(id) => closer(id)}
+                  onDisconnect={(a, b) =>
+                    run(
+                      () => api("edges", "DELETE", { a, b }),
+                      "Line removed. Undo brings it back.",
+                    )
+                  }
+                  onLooser={(id) => {
+                    const who = graph.nodes.find((p) => p.id === id);
+                    if (who)
+                      run(
+                        () => api(`people/${id}`, "PATCH", { strength: 5 }),
+                        `Line to ${who.name} removed. Undo brings it back.`,
+                      );
+                  }}
                 />
                 {!graph.nodes.length && (
                   <div className="map-empty">
@@ -978,7 +1012,8 @@ export default function Workspace() {
                           : "People with nothing going on yet. Drag one into a circle.",
                       );
                     }}
-                    emptyGroups={doing.empty}
+                    zones={doing.zones}
+                    sticky
                     onMove={async (id, _x, _y, bg) => regroup([id], bg)}
                     onMoveMany={async (ids, bg) => regroup(ids, bg)}
                     onConnect={(a, b) =>
@@ -1588,8 +1623,9 @@ export default function Workspace() {
                       ["Drag a picked person", "Move everyone picked together"],
                       [
                         "⌥ Option + drag person → person",
-                        "Draw a connection between them",
+                        "Draw a line between them; again to make it stronger",
                       ],
+                      ["Click a line", "Remove it"],
                       [
                         "⌥ Option + drag person → You",
                         "Mark them close (again for inner circle)",

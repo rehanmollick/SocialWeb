@@ -51,8 +51,15 @@ type Props = {
   onArrange: (
     positions: { id: number; x: number; y: number }[],
   ) => Promise<void>;
-  // Groups with nobody in them yet, shown as empty drop zones.
-  emptyGroups?: string[];
+  // Named drop zones. Each keeps its own spot on the ring and shows only while
+  // nobody is in that group, so filling one never shifts the others.
+  zones?: string[];
+  // People keep the spot they are in when membership changes, and a newcomer
+  // lands where it was dropped, instead of the whole group being re-seated.
+  sticky?: boolean;
+  // Click a line to remove it.
+  onDisconnect?: (a: number, b: number) => void;
+  onLooser?: (id: number) => void;
   // Several picked people dropped together; `bg` is the group they all join.
   onMoveMany?: (
     ids: number[],
@@ -90,7 +97,10 @@ export default function RelationshipMap({
   onGroup,
   onMove,
   onArrange,
-  emptyGroups = [],
+  zones = [],
+  sticky = false,
+  onDisconnect,
+  onLooser,
   onMoveMany,
   onConnect,
   onCloser,
@@ -146,20 +156,27 @@ export default function RelationshipMap({
   const centers = groupBounds(graph.nodes, positions.current, carried);
   // Empty groups ring the populated ones. The ring is sized from settled
   // targets, not live positions, so the zones hold still while you drag.
-  const ghostRing = Math.max(
-    380,
+  // The ring only ever grows, so zones never drift inward mid-session.
+  const ringSize = useRef(380);
+  ringSize.current = Math.max(
+    ringSize.current,
     ...[...targets.current.values()].map((p) => Math.hypot(p.x, p.y) + 330),
   );
-  const ghosts = emptyGroups.map((bg, i) => {
-    const angle = (i / emptyGroups.length) * Math.PI * 2 - Math.PI / 2;
-    return {
-      bg,
-      x: Math.cos(angle) * ghostRing,
-      y: Math.sin(angle) * ghostRing * 0.86,
-      r: 92,
-      ids: [] as number[],
-    };
-  });
+  const ghostRing = ringSize.current;
+  const ghosts = zones
+    .map((bg, i) => {
+      const angle = (i / zones.length) * Math.PI * 2 - Math.PI / 2;
+      return {
+        bg,
+        x: Math.cos(angle) * ghostRing,
+        y: Math.sin(angle) * ghostRing * 0.86,
+        r: 92,
+        ids: [] as number[],
+      };
+    })
+    .filter((g) => !graph.nodes.some((n) => n.bg === g.bg));
+  const [hotLine, setHotLine] = useState<string | null>(null);
+  const lastDrop = useRef<Point | null>(null);
   const ghostsRef = useRef(ghosts);
   ghostsRef.current = ghosts;
   useEffect(() => {
@@ -186,8 +203,15 @@ export default function RelationshipMap({
       const target = targets.current.get(p.id)!,
         old = positions.current.get(p.id);
       const changed = savedCoordinates.current.get(p.id) !== `${p.x}:${p.y}`;
-      const start =
-        changed && p.x !== null && p.y !== null
+      // Sticky maps: whoever already has a spot keeps it, and a newcomer
+      // appears where it was just dropped.
+      const landing = sticky && !old ? lastDrop.current : null;
+      const start = landing
+        ? {
+            x: landing.x + Math.sin(p.id * 2.4) * 14,
+            y: landing.y + Math.cos(p.id * 2.4) * 14,
+          }
+        : changed && p.x !== null && p.y !== null
           ? { x: p.x, y: p.y }
           : (old ??
             (p.x !== null && p.y !== null
@@ -202,8 +226,8 @@ export default function RelationshipMap({
       return {
         id: p.id,
         ...start,
-        tx: placed ? p.x! : target.x,
-        ty: placed ? p.y! : target.y,
+        tx: placed ? p.x! : sticky && (old || landing) ? start.x : target.x,
+        ty: placed ? p.y! : sticky && (old || landing) ? start.y : target.y,
         spacing: Math.max(
           42,
           Math.min(100, p.name.length * 3.6 + 18),
@@ -232,7 +256,10 @@ export default function RelationshipMap({
       .velocityDecay(0.62)
       .alphaDecay(0.027)
       .alphaMin(0.003);
+    // Calm by default: a full settle only for a first layout.
     if (!fresh) sim.alpha(0.08);
+    else if (sticky && positions.current.size) sim.alpha(0.2);
+    lastDrop.current = null;
     simulation.current = sim;
     setSettling(ns.length > 0);
     const update = () => {
@@ -451,10 +478,12 @@ export default function RelationshipMap({
       start: point,
       origin: kind === "pan" ? { x: e.clientX, y: e.clientY } : point,
       moved: false,
+      // A small group stays an easy target when zoomed out: its drop area is
+      // never less than a thumb-sized circle on screen.
       bounds: [
         ...groupBounds(graph.nodes, positions.current, new Set(ids)),
         ...ghostsRef.current,
-      ],
+      ].map((g) => ({ ...g, r: Math.max(g.r, 58 / camera.k) })),
       points: new Map([...positions.current].map(([id, p]) => [id, { ...p }])),
     };
   }
@@ -549,6 +578,7 @@ export default function RelationshipMap({
       redraw((v) => v + 1);
       return;
     }
+    if (d.kind === "node") lastDrop.current = positions.current.get(d.id!)!;
     if (d.kind === "node" && d.ids!.length > 1 && onMoveMany) {
       const n = graph.nodes.find((n) => n.id === d.id)!;
       const moving = new Set(d.ids);
@@ -881,24 +911,73 @@ export default function RelationshipMap({
               b = positions.current.get(e.target);
             if (!a || !b) return null;
             const active = selected === e.source || selected === e.target;
+            const key = `${e.source}-${e.target}`,
+              hot = hotLine === key;
+            // 1px at the weakest up to a clear 6px band at the strongest.
+            const width = (1 + Math.pow(e.weight / 10, 1.6) * 5) / camera.k;
             return (
-              <line
-                key={`${e.source}-${e.target}`}
-                x1={a.x}
-                y1={a.y}
-                x2={b.x}
-                y2={b.y}
-                stroke={active ? "#c6d8ee" : "#8493ad"}
-                strokeWidth={0.5 + e.weight * 0.19}
-                strokeOpacity={
-                  active
-                    ? 0.65
-                    : filtering &&
-                        (!matches.has(e.source) || !matches.has(e.target))
-                      ? 0.04
-                      : 0.2
-                }
-              />
+              <g key={key} className="map-edge" data-edge={key}>
+                <line
+                  x1={a.x}
+                  y1={a.y}
+                  x2={b.x}
+                  y2={b.y}
+                  stroke={hot ? "#ffb4b4" : active ? "#c6d8ee" : "#9fb0cc"}
+                  strokeLinecap="round"
+                  strokeWidth={width}
+                  strokeOpacity={
+                    hot || active
+                      ? 0.85
+                      : filtering &&
+                          (!matches.has(e.source) || !matches.has(e.target))
+                        ? 0.05
+                        : 0.38
+                  }
+                  pointerEvents="none"
+                />
+                {onDisconnect && (
+                  <line
+                    className="line-hit"
+                    x1={a.x}
+                    y1={a.y}
+                    x2={b.x}
+                    y2={b.y}
+                    stroke="transparent"
+                    strokeWidth={14 / camera.k}
+                    style={{ cursor: "pointer" }}
+                    onPointerEnter={() => setHotLine(key)}
+                    onPointerLeave={() => setHotLine(null)}
+                    onPointerDown={(ev) => ev.stopPropagation()}
+                    onClick={() => {
+                      setHotLine(null);
+                      onDisconnect(e.source, e.target);
+                    }}
+                  >
+                    <title>Click to remove this line</title>
+                  </line>
+                )}
+                {hot && (
+                  <g
+                    transform={`translate(${(a.x + b.x) / 2},${(a.y + b.y) / 2})`}
+                    pointerEvents="none"
+                  >
+                    <circle
+                      r={9 / camera.k}
+                      fill="#2a1418"
+                      stroke="#ffb4b4"
+                      strokeWidth={1 / camera.k}
+                    />
+                    <text
+                      textAnchor="middle"
+                      y={4 / camera.k}
+                      fontSize={13 / camera.k}
+                      fill="#ffd0d0"
+                    >
+                      ×
+                    </text>
+                  </g>
+                )}
+              </g>
             );
           })}
           {/* A line to you means you are close; it thickens with closeness. */}
@@ -915,18 +994,33 @@ export default function RelationshipMap({
                   y1={0}
                   x2={p.x}
                   y2={p.y}
-                  stroke={colorFor(n.bg)}
+                  stroke={hotLine === `me-${n.id}` ? "#ffb4b4" : colorFor(n.bg)}
                   strokeLinecap="round"
-                  strokeWidth={bondWidth(n) / camera.k}
-                  strokeOpacity={
-                    filtering && !matches.has(n.id)
-                      ? 0.06
-                      : n.id === selected
-                        ? 0.85
-                        : 0.42
+                  strokeWidth={
+                    Math.max(bondWidth(n), hotLine === `me-${n.id}` ? 3 : 0) /
+                    camera.k
                   }
-                  pointerEvents="none"
-                />
+                  strokeOpacity={
+                    hotLine === `me-${n.id}`
+                      ? 0.9
+                      : filtering && !matches.has(n.id)
+                        ? 0.06
+                        : n.id === selected
+                          ? 0.85
+                          : 0.42
+                  }
+                  style={onLooser ? { cursor: "pointer" } : undefined}
+                  pointerEvents={onLooser ? "stroke" : "none"}
+                  onPointerEnter={() => setHotLine(`me-${n.id}`)}
+                  onPointerLeave={() => setHotLine(null)}
+                  onPointerDown={(ev) => onLooser && ev.stopPropagation()}
+                  onClick={() => {
+                    setHotLine(null);
+                    onLooser?.(n.id);
+                  }}
+                >
+                  {onLooser && <title>Click to remove this line</title>}
+                </line>
               ) : null;
             })}
           <g
